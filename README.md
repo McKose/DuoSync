@@ -60,8 +60,7 @@ npx expo start --dev-client
 | `npm run lint` | ESLint (`eslint-config-expo` + react-hooks kuralları, `exhaustive-deps` hata seviyesinde) | ✅ 0 bulgu |
 | `npm run typecheck` | Tüm istemci kodu, `database.types.ts` ile RPC/tablo tipleri | ✅ 0 hata |
 | `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 43/43 |
-| `deno test supabase/functions/_shared` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
-| `deno check supabase/functions/*/index.ts` | Edge Function tipleri | ✅ |
+| `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
 | `npx expo export --platform android` | Metro + NativeWind + Reanimated 4 + Hermes bundle | ✅ 4.1 MB `.hbc` |
 
 CI (`.github/workflows/ci.yml`) bu kontrolleri her push ve PR'da çalıştırır.

@@ -10,8 +10,8 @@ jobs:
     name: Lint · Typecheck · DB/RLS tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -24,9 +24,13 @@ jobs:
     name: Edge Functions (deno check + test)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check supabase/functions/ai-court-verdict/index.ts supabase/functions/send-push-notification/index.ts
-      - run: deno test supabase/functions/_shared
+      # Run from supabase/functions so its deno.json (nodeModulesDir: none)
+      # applies instead of the Expo package.json at the repo root.
+      - run: deno check ai-court-verdict/index.ts send-push-notification/index.ts
+        working-directory: supabase/functions
+      - run: deno test _shared
+        working-directory: supabase/functions

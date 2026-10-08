@@ -49,7 +49,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test:db": "node supabase/tests/rls.test.mjs",
-    "test:functions": "deno test supabase/functions/_shared",
+    "test:functions": "cd supabase/functions && deno check ai-court-verdict/index.ts send-push-notification/index.ts && deno test _shared",
     "verify": "npm run lint && npm run typecheck && npm run test:db",
     "lint": "eslint ."
   },

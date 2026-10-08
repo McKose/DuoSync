@@ -28,7 +28,7 @@ verdict endpoint).
 ```
 npm run typecheck
 npm run test:db                         # add a test for every new RLS/RPC rule
-deno test supabase/functions/_shared
+npm run test:functions                  # runs from supabase/functions (own deno.json)
 ```
 
 ## Conventions
