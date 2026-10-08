@@ -15,6 +15,18 @@ import { useCoupleStore } from '@/store/useCoupleStore';
 
 const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 
+/**
+ * Native share sheet; on web (where Web Share may be missing or refused) fall
+ * back to the clipboard. Must run synchronously inside the press handler for
+ * the clipboard call to be allowed.
+ */
+function sharePairingCode(code: string) {
+  const message = `DuoSync eşleşme kodum: ${code}`;
+  Share.share({ message }).catch(() => {
+    globalThis.navigator?.clipboard?.writeText(code).catch(() => undefined);
+  });
+}
+
 export function PairingScreen() {
   const queryClient = useQueryClient();
   const userId = useCoupleStore((s) => s.userId)!;
@@ -70,7 +82,7 @@ export function PairingScreen() {
               <AppButton
                 label="Paylaş"
                 className="mr-2 flex-1"
-                onPress={() => void Share.share({ message: `DuoSync eşleşme kodum: ${pendingCode}` })}
+                onPress={() => sharePairingCode(pendingCode)}
               />
               <AppButton
                 label="Yeni kod"

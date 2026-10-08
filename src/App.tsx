@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PERSIST_BUSTER, PERSIST_MAX_AGE, persister, queryClient } from '@/api/queryClient';
+import { ConfirmHost } from '@/components/common/ConfirmHost';
 import { AppNavigator } from '@/navigation/AppNavigator';
 import { IS_DEMO, startDemoTicker } from '@/demo';
 
@@ -23,6 +24,7 @@ export default function App() {
       >
         <StatusBar style="dark" />
         <AppNavigator />
+        <ConfirmHost />
       </PersistQueryClientProvider>
     </SafeAreaProvider>
   );

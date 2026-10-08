@@ -27,7 +27,9 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => {
   if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);
 });
-page.on('dialog', (d) => d.accept()); // window.confirm from confirmAction
+// Sandboxed viewers make confirm() return false; dismiss every native dialog so
+// destructive flows can only pass through the in-app confirm modal.
+page.on('dialog', (d) => d.dismiss());
 
 const results = [];
 let n = 0;
@@ -38,16 +40,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function waitText(text, timeout = 15000) {
   // textContent, not innerText: innerText applies CSS text-transform
   // (section titles are uppercase) and would never match the source copy.
-  await page.waitForFunction((t) => document.body.textContent.includes(t), { timeout }, text);
+  await page.waitForFunction((t) => window.__visibleText().includes(t), { timeout }, text);
 }
-/** Click the innermost element whose own text equals/contains `text`. */
+/**
+ * Click the innermost element containing `text`. Waits until its button is
+ * enabled: a button that becomes enabled by the keystroke just typed may not
+ * have re-rendered yet, and clicking a disabled button is a silent no-op.
+ */
 async function click(text) {
   await waitText(text);
+  await page.waitForFunction(
+    (t) => {
+      const el = window.__leafWith(t);
+      const target = el?.closest('[role="button"],[role="tab"],[role="radio"],[role="checkbox"],a,button') ?? el;
+      return target && target.getAttribute('aria-disabled') !== 'true';
+    },
+    { timeout: 5000 },
+    text,
+  );
   const ok = await page.evaluate((t) => {
-    const all = [...document.querySelectorAll('body *')].filter(
-      (el) => el.childElementCount === 0 && el.textContent.trim().includes(t),
-    );
-    const el = all.at(-1);
+    const el = window.__leafWith(t);
     if (!el) return false;
     const target = el.closest('[role="button"],[role="tab"],[role="radio"],[role="checkbox"],a,button') ?? el;
     target.click();
@@ -84,7 +96,27 @@ async function step(name, fn) {
     await shot(`FAIL-${name.replace(/\W+/g, '_')}`);
   }
 }
-const hasText = (t) => page.evaluate((x) => document.body.textContent.includes(x), t);
+const hasText = (t) => page.evaluate((x) => window.__visibleText().includes(x), t);
+
+// In-page text helpers. Text inside <script>/<style>/<noscript> is excluded:
+// a single-file build inlines the JS bundle into <body>, whose source code
+// contains every UI string and would otherwise satisfy every text check.
+await page.evaluateOnNewDocument(() => {
+  const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  window.__visibleText = () => {
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement && !n.parentElement.closest('script,style,noscript,template') ? 1 : 2),
+    });
+    let out = '';
+    while (w.nextNode()) out += w.currentNode.nodeValue;
+    return out;
+  };
+  window.__leafWith = (t) =>
+    [...document.querySelectorAll('body *')]
+      .filter((e) => !SKIP.has(e.tagName) && !e.closest('script,style,noscript,template'))
+      .filter((e) => e.childElementCount === 0 && e.textContent.trim().includes(t))
+      .at(-1);
+});
 
 await page.goto(URL, { waitUntil: 'networkidle0' });
 
@@ -166,6 +198,9 @@ await step('cooling-off: schedule then silently cancel', async () => {
   await waitText('Vazgeç, gönderme');
   await shot('cooling-pending');
   await click('Vazgeç, gönderme');
+  await waitText('bu mesajın varlığından hiç haberdar olmayacak'); // in-app confirm modal
+  await shot('cooling-confirm');
+  await click('Geri çek');
   await waitText('Geri çekildi');
   await shot('cooling-cancelled');
 });

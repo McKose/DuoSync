@@ -20,4 +20,4 @@ supabase/functions/.env
 # demo-mode web build + e2e artifacts
 dist-web/
 tests/e2e/node_modules/
-tests/e2e/shots/
+tests/e2e/shots*/

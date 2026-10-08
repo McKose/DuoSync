@@ -142,7 +142,11 @@ export function createDemoBackend(deps: DemoDeps) {
     if (dirty.size === 0) return;
     const chs = [...dirty];
     dirty.clear();
-    await deps.storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    try {
+      await deps.storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // Storage blocked (private window, quota): keep working in memory.
+    }
     for (const ch of chs) listeners.get(ch)?.forEach((fn) => fn());
   }
 
