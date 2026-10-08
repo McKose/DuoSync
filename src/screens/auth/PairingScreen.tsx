@@ -8,6 +8,7 @@ import { AppButton } from '@/components/common/AppButton';
 import { Screen } from '@/components/common/Screen';
 import { Card, ErrorBanner, SectionTitle } from '@/components/common/StateViews';
 import { TextField } from '@/components/common/TextField';
+import { DEMO_PARTNER_NAME, IS_DEMO } from '@/demo';
 import { useNow } from '@/hooks/useNow';
 import { formatCountdown } from '@/lib/time';
 import { useCoupleStore } from '@/store/useCoupleStore';
@@ -42,6 +43,14 @@ export function PairingScreen() {
 
   return (
     <Screen title="Partnerini bağla" subtitle="DuoSync yalnızca iki kişi içindir. Biriniz kod oluşturur, diğeri girer.">
+      {IS_DEMO ? (
+        <Card className="bg-paper-sunk">
+          <Text className="text-xs leading-5 text-ink-soft">
+            Demo: kod oluşturursan {DEMO_PARTNER_NAME} ~5 sn içinde katılır. Ya da 6 karakterlik herhangi bir kodu gir (ör. K7M2QX).
+          </Text>
+        </Card>
+      ) : null}
+
       <SectionTitle>1 · Kod oluştur</SectionTitle>
       <Card>
         <ErrorBanner error={create.error} />

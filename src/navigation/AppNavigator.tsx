@@ -7,6 +7,8 @@ import { useBatterySync } from '@/hooks/useBatterySync';
 import { useCoupleSession } from '@/hooks/useCoupleSession';
 import { flushPendingNotificationRoute, usePushRegistration } from '@/hooks/usePushRegistration';
 import { signOut } from '@/api/auth';
+import { IS_DEMO } from '@/demo/config';
+import { DemoPanelScreen } from '@/screens/demo/DemoPanelScreen';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
 import { PairingScreen } from '@/screens/auth/PairingScreen';
 import { NewCaseScreen } from '@/screens/court/NewCaseScreen';
@@ -39,7 +41,8 @@ export function AppNavigator() {
 
   // Passive battery sync + push registration only for paired users.
   useBatterySync(session.userId, paired);
-  usePushRegistration(session.userId, paired);
+  // No remote push in demo mode (no backend to send it; Expo Go can't receive it).
+  usePushRegistration(session.userId, paired && !IS_DEMO);
 
   if (session.status === 'loading') return <LoadingView />;
   if (session.status === 'error') return <SessionError error={session.error} onRetry={session.retry} />;
@@ -66,6 +69,9 @@ export function AppNavigator() {
             <Stack.Screen name="Verdict" component={VerdictScreen} options={{ title: 'Dava dosyası' }} />
           </>
         )}
+        {IS_DEMO ? (
+          <Stack.Screen name="DemoPanel" component={DemoPanelScreen} options={{ title: 'Demo kontrol paneli' }} />
+        ) : null}
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -6,6 +6,7 @@ import { AppButton } from '@/components/common/AppButton';
 import { Screen } from '@/components/common/Screen';
 import { ErrorBanner } from '@/components/common/StateViews';
 import { TextField } from '@/components/common/TextField';
+import { IS_DEMO } from '@/demo/config';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -53,6 +54,14 @@ export function LoginScreen() {
         <View className="mb-4 rounded-xl2 bg-sage-soft p-4">
           <Text className="text-sm text-ink">
             Onay e-postası gönderildi. Bağlantıya tıkladıktan sonra buradan giriş yapabilirsin.
+          </Text>
+        </View>
+      ) : null}
+
+      {IS_DEMO ? (
+        <View className="mb-4 rounded-xl2 bg-paper-sunk p-3">
+          <Text className="text-xs leading-5 text-ink-soft">
+            Demo modu: hiçbir veritabanına bağlanılmaz. Herhangi bir e-posta ve en az 8 karakterlik bir şifreyle giriş yapabilirsin.
           </Text>
         </View>
       ) : null}

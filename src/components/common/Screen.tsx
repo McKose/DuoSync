@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DemoBanner } from './DemoBanner';
 import { OfflineBanner } from './OfflineBanner';
 
 interface Props {
@@ -46,6 +47,7 @@ export function Screen({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ paddingTop: insetTop ? insets.top : 0 }}
     >
+      <DemoBanner />
       <OfflineBanner />
       {scroll ? (
         <ScrollView

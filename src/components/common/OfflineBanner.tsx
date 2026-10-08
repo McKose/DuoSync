@@ -1,11 +1,18 @@
-import { useNetInfo } from '@react-native-community/netinfo';
+import { onlineManager } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 import { Text, View } from 'react-native';
 
-/** Shown while the device is offline; queued changes sync on reconnect. */
+const subscribe = (cb: () => void) => onlineManager.subscribe(cb);
+const getOnline = () => onlineManager.isOnline();
+
+/**
+ * Shown while offline; queued changes sync on reconnect. Reads React Query's
+ * onlineManager (fed by NetInfo, or by the demo panel in demo mode) so the
+ * banner always agrees with whether mutations are actually paused.
+ */
 export function OfflineBanner() {
-  const net = useNetInfo();
-  const offline = net.isConnected === false || net.isInternetReachable === false;
-  if (!offline) return null;
+  const online = useSyncExternalStore(subscribe, getOnline);
+  if (online) return null;
   return (
     <View className="bg-amber-soft px-4 py-2" accessibilityRole="alert">
       <Text className="text-center text-xs font-semibold text-ink">

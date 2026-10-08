@@ -37,9 +37,11 @@
     "@electric-sql/pglite": "^0.5.8",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "^57.0.14",
+    "cross-env": "^10.1.0",
     "eslint": "^9.39.5",
     "prettier-plugin-tailwindcss": "^0.5.14",
     "tailwindcss": "^3.4.19",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -50,8 +52,10 @@
     "typecheck": "tsc --noEmit",
     "test:db": "node supabase/tests/rls.test.mjs",
     "test:functions": "cd supabase/functions && deno check ai-court-verdict/index.ts send-push-notification/index.ts && deno test _shared",
-    "verify": "npm run lint && npm run typecheck && npm run test:db",
-    "lint": "eslint ."
+    "verify": "npm run lint && npm run typecheck && npm run test:db && npm run test:demo",
+    "lint": "eslint .",
+    "test:demo": "node --import tsx --test tests/demo/engine.test.ts",
+    "demo": "cross-env EXPO_PUBLIC_DEMO_MODE=1 expo start"
   },
   "private": true
 }

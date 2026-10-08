@@ -2,8 +2,10 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
 import { unwrap } from '@/lib/errors';
 import type { CaseCategory, CourtCase } from '@/types/database.types';
 import { supabase } from './supabase';
+import { demo, IS_DEMO } from '@/demo';
 
 export async function listCases(coupleId: string): Promise<CourtCase[]> {
+  if (IS_DEMO) return demo.listCases(coupleId);
   return unwrap(
     await supabase
       .from('court_cases')
@@ -15,6 +17,7 @@ export async function listCases(coupleId: string): Promise<CourtCase[]> {
 }
 
 export async function getCase(caseId: string): Promise<CourtCase> {
+  if (IS_DEMO) return demo.getCase(caseId);
   return unwrap(await supabase.from('court_cases').select('*').eq('id', caseId).single());
 }
 
@@ -23,6 +26,7 @@ export async function fileCase(input: {
   category: CaseCategory;
   plea: string;
 }): Promise<CourtCase> {
+  if (IS_DEMO) return demo.fileCase(input);
   return unwrap(
     await supabase.rpc('file_case', {
       p_title: input.title.trim(),
@@ -33,6 +37,7 @@ export async function fileCase(input: {
 }
 
 export async function submitDefense(caseId: string, plea: string): Promise<CourtCase> {
+  if (IS_DEMO) return demo.submitDefense(caseId, plea);
   return unwrap(await supabase.rpc('submit_defense', { p_case_id: caseId, p_plea: plea.trim() }));
 }
 
@@ -45,6 +50,7 @@ export type VerdictRequestResult = 'judged' | 'already_handled' | 'failed';
  * defense lock, so calling this early is harmless (also 409).
  */
 export async function requestVerdict(caseId: string): Promise<VerdictRequestResult> {
+  if (IS_DEMO) return demo.requestVerdict(caseId);
   const { error } = await supabase.functions.invoke('ai-court-verdict', {
     body: { case_id: caseId },
   });

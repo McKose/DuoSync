@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { fetchMyCouple } from '@/api/couple';
 import { qk } from '@/api/keys';
 import { supabase } from '@/api/supabase';
+import { demo, IS_DEMO, toDemoSession } from '@/demo';
 import { useCoupleStore } from '@/store/useCoupleStore';
 import { useRealtimeSubscription } from './useRealtimeSubscription';
 
@@ -16,6 +17,7 @@ export function useCoupleSession() {
   const authReady = useCoupleStore((s) => s.authReady);
   const userId = useCoupleStore((s) => s.userId);
   const couple = useCoupleStore((s) => s.couple);
+  const partnerId = useCoupleStore((s) => s.partnerId);
   const setAuth = useCoupleStore((s) => s.setAuth);
   const setCouple = useCoupleStore((s) => s.setCouple);
 
@@ -23,6 +25,19 @@ export function useCoupleSession() {
   //    awaiting Supabase calls inside onAuthStateChange can deadlock the client.
   useEffect(() => {
     let mounted = true;
+    if (IS_DEMO) {
+      const load = () =>
+        demo
+          .getSession()
+          .then((s) => mounted && setAuth(toDemoSession(s)))
+          .catch(() => mounted && setAuth(null));
+      void load();
+      const off = demo.subscribe('auth', () => void load());
+      return () => {
+        mounted = false;
+        off();
+      };
+    }
     supabase.auth
       .getSession()
       .then(({ data }) => mounted && setAuth(data.session))
@@ -58,7 +73,12 @@ export function useCoupleSession() {
   if (!authReady) status = 'loading';
   else if (!userId) status = 'signed_out';
   else if (coupleQuery.data === undefined) status = coupleQuery.isError ? 'error' : 'loading';
-  else status = coupleQuery.data?.is_active ? 'paired' : 'unpaired';
+  else if (!coupleQuery.data?.is_active) status = 'unpaired';
+  // The query flips to "active" one render before the effect above copies it
+  // into the store. Screens in the paired stack read the store synchronously
+  // (usePairedContext), so only report 'paired' once the store has caught up;
+  // otherwise the moment a partner joins would crash TabNavigator.
+  else status = couple?.id === coupleQuery.data.id && couple.is_active && partnerId ? 'paired' : 'loading';
 
   return {
     status,

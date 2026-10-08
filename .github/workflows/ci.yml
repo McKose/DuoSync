@@ -19,6 +19,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:db
+      - run: npm run test:demo
 
   functions:
     name: Edge Functions (deno check + test)
@@ -34,3 +35,32 @@ jobs:
         working-directory: supabase/functions
       - run: deno test _shared
         working-directory: supabase/functions
+
+  e2e-demo:
+    name: Demo mode E2E (headless Chromium, no database)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build web bundle in demo mode
+        run: npx expo export --platform web --output-dir dist-web
+        env:
+          EXPO_PUBLIC_DEMO_MODE: '1'
+          CI: '1'
+      - run: npm ci
+        working-directory: tests/e2e
+      - name: Run E2E
+        run: |
+          python3 -m http.server 8099 --directory dist-web --bind 127.0.0.1 &
+          sleep 2
+          cd tests/e2e && node demo.e2e.mjs http://127.0.0.1:8099/ ./shots
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-e2e-screenshots
+          path: tests/e2e/shots/

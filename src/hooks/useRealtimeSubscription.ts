@@ -3,6 +3,7 @@ import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { supabase } from '@/api/supabase';
+import { demo, IS_DEMO } from '@/demo';
 import type { Database } from '@/types/database.types';
 
 type TableName = keyof Database['public']['Tables'];
@@ -71,6 +72,21 @@ export function useRealtimeSubscription<T extends TableName>({
       for (const key of keysRef.current) void queryClient.invalidateQueries({ queryKey: key });
     };
 
+    const appStateSub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') refresh();
+    });
+
+    if (IS_DEMO) {
+      // Demo backend emits per-table change events in-process — same contract
+      // as postgres_changes (it already applies RLS-equivalent visibility).
+      refresh();
+      const off = demo.subscribe(table, refresh);
+      return () => {
+        appStateSub.remove();
+        off();
+      };
+    }
+
     const channel = supabase
       .channel(`rt:${name}:${table}:${filter ?? 'all'}:${++channelSeq}`)
       .on(
@@ -87,10 +103,6 @@ export function useRealtimeSubscription<T extends TableName>({
         // Covers the initial subscribe and every reconnect after a drop.
         if (status === 'SUBSCRIBED') refresh();
       });
-
-    const appStateSub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') refresh();
-    });
 
     return () => {
       appStateSub.remove();

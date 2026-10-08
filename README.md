@@ -12,6 +12,38 @@
 
 ---
 
+## Hızlı test: Demo modu (veritabanı yok)
+
+Supabase kurmadan uygulamanın tamamını denemek için:
+
+```bash
+npm install
+npm run demo            # Expo Go ile QR'ı okut
+npm run demo -- --web   # ya da tarayıcıda aç
+```
+
+`.env` yoksa uygulama **otomatik olarak** demo modunda açılır; `EXPO_PUBLIC_DEMO_MODE=1` ile env olsa bile zorlanabilir. Her ekranın üstünde siyah bir **DEMO** şeridi görünür; dokununca kontrol paneli açılır.
+
+| Gerçek backend | Demo karşılığı |
+|---|---|
+| Supabase Postgres + RLS | Cihaz içi sahte backend (`src/demo/engine.ts`), AsyncStorage'da kalıcı |
+| Realtime | Uygulama içi tablo-bazlı olay yayını |
+| Partner | Simüle partner **Deniz**: koduna 5 sn'de katılır, davana ~8 sn'de savunma verir, sorunu ~6 sn'de cevaplar |
+| Gemini hakem | Kurallı, deterministik taklit (`src/demo/judge.ts`), kararlarda "DEMO HAKEM" etiketi |
+| pg_cron (1 dk / 10 dk) | Ön plandayken 1 sn'lik tetikleyici |
+| Push bildirimleri | Kapalı |
+
+**Aynı kurallar uygulanır:** savunma kilidi ve 24 saat zaman aşımı, sessiz iptal görünürlüğü (alıcı PENDING/CANCELLED mesajı asla görmez), öğe bazlı LWW checklist birleştirme ve saat kayması koruması, LOW_BATTERY mantığı, eşleşme kuralları, günlük dava limiti ve hata kodları.
+
+**Kontrol paneli:**
+- Çevrimdışı simülasyonu: React Query mutasyonları duraklar, checklist değişiklikleri kuyruğa girer.
+- Saat ölçeği: hızlı modda 1 dk = 1 sn; 15 dk'lık soğuma 15 sn sürer.
+- Ağ gecikmesi.
+- Deniz'in eylemleri: dava açma, mesaj yazıp **sessizce geri çekme**, soru sorma, checklist işaretleme, pil/durum değiştirme.
+- Savunma süresini doldurma ve demoyu sıfırlama.
+
+> Demo modu yalnızca geliştirme/test içindir; veriler şifrelenmeden cihazda durur ve iki gerçek kişiyi eşleştirmez.
+
 ## Kurulum
 
 ### 1. Uygulama
@@ -60,6 +92,8 @@ npx expo start --dev-client
 | `npm run lint` | ESLint (`eslint-config-expo` + react-hooks kuralları, `exhaustive-deps` hata seviyesinde) | ✅ 0 bulgu |
 | `npm run typecheck` | Tüm istemci kodu, `database.types.ts` ile RPC/tablo tipleri | ✅ 0 hata |
 | `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 43/43 |
+| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, hata kodları) | ✅ 20/20 |
+| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → dava/savunma/karar → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı | ✅ 11/11, 0 tarayıcı hatası |
 | `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
 | `npx expo export --platform android` | Metro + NativeWind + Reanimated 4 + Hermes bundle | ✅ 4.1 MB `.hbc` |
 

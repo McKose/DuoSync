@@ -17,4 +17,6 @@ export type RootStackParamList = {
   PlanDetail: { planId: string };
   NewCase: undefined;
   Verdict: { caseId: string };
+  // demo mode only
+  DemoPanel: undefined;
 };

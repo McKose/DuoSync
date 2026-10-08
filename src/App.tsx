@@ -1,11 +1,16 @@
 import '../global.css';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PERSIST_BUSTER, PERSIST_MAX_AGE, persister, queryClient } from '@/api/queryClient';
 import { AppNavigator } from '@/navigation/AppNavigator';
+import { IS_DEMO, startDemoTicker } from '@/demo';
 
 export default function App() {
+  // Demo mode: drive the simulated server clock while foregrounded.
+  useEffect(() => (IS_DEMO ? startDemoTicker() : undefined), []);
+
   return (
     <SafeAreaProvider>
       <PersistQueryClientProvider

@@ -39,6 +39,8 @@ export function AppButton({
       disabled={inactive}
       accessibilityRole="button"
       accessibilityState={{ disabled: inactive, busy: loading }}
+      aria-disabled={inactive}
+      aria-busy={loading}
       accessibilityHint={accessibilityHint}
       className={`flex-row items-center justify-center rounded-xl2 ${
         size === 'sm' ? 'min-h-[36px] px-3' : 'min-h-[50px] px-5'

@@ -1,6 +1,7 @@
 import { unwrap } from '@/lib/errors';
 import type { DelayedMessage, PendingQuestion } from '@/types/database.types';
 import { supabase } from './supabase';
+import { demo, IS_DEMO } from '@/demo';
 
 // ---------------------------------------------------------------------------
 // Cooling-off room
@@ -14,6 +15,7 @@ export type DelayMinutes = (typeof DELAY_OPTIONS)[number];
  * are already SENT. Pending/cancelled partner messages are never visible.
  */
 export async function listMessages(coupleId: string): Promise<DelayedMessage[]> {
+  if (IS_DEMO) return demo.listMessages(coupleId);
   return unwrap(
     await supabase
       .from('delayed_messages')
@@ -25,6 +27,7 @@ export async function listMessages(coupleId: string): Promise<DelayedMessage[]> 
 }
 
 export async function scheduleMessage(content: string, delayMinutes: DelayMinutes): Promise<DelayedMessage> {
+  if (IS_DEMO) return demo.scheduleMessage(content, delayMinutes);
   return unwrap(
     await supabase.rpc('schedule_delayed_message', {
       p_content: content.trim(),
@@ -35,6 +38,7 @@ export async function scheduleMessage(content: string, delayMinutes: DelayMinute
 
 /** Returns false if the message was already released (too late to cancel). */
 export async function cancelMessage(messageId: string): Promise<boolean> {
+  if (IS_DEMO) return demo.cancelMessage(messageId);
   return unwrap(await supabase.rpc('cancel_delayed_message', { p_message_id: messageId }));
 }
 
@@ -43,6 +47,7 @@ export async function cancelMessage(messageId: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export async function listQuestions(coupleId: string): Promise<PendingQuestion[]> {
+  if (IS_DEMO) return demo.listQuestions(coupleId);
   return unwrap(
     await supabase
       .from('pending_questions')
@@ -55,13 +60,16 @@ export async function listQuestions(coupleId: string): Promise<PendingQuestion[]
 }
 
 export async function askQuestion(text: string): Promise<PendingQuestion> {
+  if (IS_DEMO) return demo.askQuestion(text);
   return unwrap(await supabase.rpc('ask_question', { p_text: text.trim() }));
 }
 
 export async function answerQuestion(questionId: string, answer: string): Promise<PendingQuestion> {
+  if (IS_DEMO) return demo.answerQuestion(questionId, answer);
   return unwrap(await supabase.rpc('answer_question', { p_question_id: questionId, p_answer: answer.trim() }));
 }
 
 export async function deleteQuestion(questionId: string): Promise<void> {
+  if (IS_DEMO) return demo.deleteQuestion(questionId);
   unwrap(await supabase.from('pending_questions').delete().eq('id', questionId));
 }

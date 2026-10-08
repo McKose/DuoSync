@@ -1,0 +1,13 @@
+{
+  "name": "duosync-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Headless-browser smoke test of DuoSync demo mode (web build). Isolated from the app's dependencies.",
+  "scripts": {
+    "test": "node demo.e2e.mjs"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^153.0.0",
+    "puppeteer-core": "^25.13.0"
+  }
+}

@@ -23,12 +23,18 @@ verdict endpoint).
    trigger/notification on `delayed_messages` must fire only on PENDING→SENT.
 4. Battery: no background tasks/listeners/polling. `useBatterySync` only.
 5. Checklist: mutate only through `upsert_checklist_item` (per-item LWW).
+6. Demo mode (`src/demo/`) mirrors the server's rules. Any change to an RPC,
+   policy or error code must be reflected in `src/demo/engine.ts` and covered
+   in `tests/demo/engine.test.ts`; every `src/api/*` function keeps its
+   `if (IS_DEMO) return demo.…` first line.
 
 ## Before declaring work done
 ```
 npm run typecheck
 npm run test:db                         # add a test for every new RLS/RPC rule
 npm run test:functions                  # runs from supabase/functions (own deno.json)
+npm run test:demo                       # demo backend contract
+# UI changes: tests/e2e/demo.e2e.mjs (see header) — also runs in CI
 ```
 
 ## Conventions

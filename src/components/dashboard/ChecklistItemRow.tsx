@@ -14,6 +14,7 @@ export function ChecklistItemRow({ item, onToggle, onRemove }: Props) {
         onPress={onToggle}
         accessibilityRole="checkbox"
         accessibilityState={{ checked: item.done }}
+        aria-checked={item.done}
         accessibilityLabel={item.text}
         hitSlop={8}
         className="flex-1 flex-row items-center"

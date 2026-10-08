@@ -59,6 +59,7 @@ export function Chip({
       onPress={onPress}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
+      aria-selected={selected}
       className={`mb-2 mr-2 rounded-full border px-3.5 py-2 ${selected ? on : 'border-paper-sunk bg-paper-raised'}`}
     >
       <Text className={`text-sm font-medium ${selected ? 'text-white' : 'text-ink-soft'}`}>{label}</Text>
