@@ -1,0 +1,11 @@
+project_id = "duosync"
+
+# Both functions authenticate manually:
+#  - ai-court-verdict: user JWT (client fallback) OR x-internal-secret (webhook/cron)
+#  - send-push-notification: x-internal-secret only
+# pg_net/pg_cron calls carry no user JWT, so gateway JWT verification is off.
+[functions.ai-court-verdict]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false
