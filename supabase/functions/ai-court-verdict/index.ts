@@ -36,7 +36,42 @@ const GEMINI_BASE_URL = Deno.env.get('GEMINI_BASE_URL') ?? 'https://generativela
 
 const GEMINI_TIMEOUT_MS = 45_000;
 const MAX_LLM_ATTEMPTS = 2; // per claim; the cron sweep retries across claims (cap 5)
-const SWEEP_BATCH = 5; // keep a sweep well inside the Edge Function wall-clock limit
+const SWEEP_BATCH = 5;
+// Wall clock limit is 150 s (Free) / 400 s (paid) per worker, including
+// background work. A single case is ≤ ~92 s worst case (2 × 45 s + backoff),
+// so we stop *starting* new cases after 50 s: 50 + 92 < 150.
+const SWEEP_BUDGET_MS = 50_000;
+
+// Supabase Edge Runtime global (absent under plain `deno`).
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+
+/**
+ * Internal callers (pg_net webhook, pg_cron) use a 10 s HTTP timeout and
+ * never read the response, while an LLM call can take 30–90 s. Acknowledge
+ * immediately and keep working in the background so the caller's timeout
+ * can't race the judgement.
+ */
+function runInBackground(label: string, work: () => Promise<unknown>): Response {
+  const task = work().catch((e) => console.error(`${label} background failure:`, e));
+  if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(task);
+  return json({ accepted: true, task: label }, 202);
+}
+
+async function sweep(): Promise<JudgeOutcome[]> {
+  const started = Date.now();
+  const { data: ids, error } = await admin.rpc('list_claimable_cases', { p_limit: SWEEP_BATCH });
+  if (error) throw new Error(`list_claimable_cases: ${error.message}`);
+  const results: JudgeOutcome[] = [];
+  for (const id of (ids as string[] | null) ?? []) {
+    if (Date.now() - started > SWEEP_BUDGET_MS) {
+      console.log(`sweep budget reached; ${results.length} judged, rest deferred to next run`);
+      break;
+    }
+    results.push(await judgeCase(id)); // sequential: bounded LLM concurrency/cost
+  }
+  console.log('sweep results', JSON.stringify(results));
+  return results;
+}
 
 const admin: SupabaseClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -176,24 +211,20 @@ Deno.serve(async (req) => {
   try {
     if (body.mode === 'sweep') {
       if (!internal) return json({ error: 'FORBIDDEN' }, 403);
-      const { data: ids, error } = await admin.rpc('list_claimable_cases', { p_limit: SWEEP_BATCH });
-      if (error) throw new Error(`list_claimable_cases: ${error.message}`);
-      const results: JudgeOutcome[] = [];
-      for (const id of (ids as string[] | null) ?? []) {
-        results.push(await judgeCase(id)); // sequential: bounded LLM concurrency/cost
-      }
-      return json({ mode: 'sweep', results });
+      return runInBackground('sweep', sweep);
     }
 
     const caseId = body.case_id;
     if (typeof caseId !== 'string' || !UUID_RE.test(caseId)) {
       return json({ error: 'INVALID_CASE_ID' }, 400);
     }
-    if (!internal) {
-      const denied = await assertCaller(req, caseId);
-      if (denied) return denied;
+    if (internal) {
+      return runInBackground(`case:${caseId}`, () => judgeCase(caseId));
     }
+    const denied = await assertCaller(req, caseId);
+    if (denied) return denied;
 
+    // User-initiated (client fallback): synchronous so the app gets a result.
     const outcome = await judgeCase(caseId);
     const status = outcome.status === 'judged' ? 200 : outcome.status === 'not_claimable' ? 409 : 502;
     return json(outcome, status);

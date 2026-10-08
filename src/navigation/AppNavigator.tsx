@@ -5,7 +5,7 @@ import { AppButton } from '@/components/common/AppButton';
 import { ErrorBanner, LoadingView } from '@/components/common/StateViews';
 import { useBatterySync } from '@/hooks/useBatterySync';
 import { useCoupleSession } from '@/hooks/useCoupleSession';
-import { usePushRegistration } from '@/hooks/usePushRegistration';
+import { flushPendingNotificationRoute, usePushRegistration } from '@/hooks/usePushRegistration';
 import { signOut } from '@/api/auth';
 import { LoginScreen } from '@/screens/auth/LoginScreen';
 import { PairingScreen } from '@/screens/auth/PairingScreen';
@@ -45,7 +45,7 @@ export function AppNavigator() {
   if (session.status === 'error') return <SessionError error={session.error} onRetry={session.retry} />;
 
   return (
-    <NavigationContainer ref={navigationRef} theme={theme}>
+    <NavigationContainer ref={navigationRef} theme={theme} onReady={flushPendingNotificationRoute}>
       <Stack.Navigator
         screenOptions={{
           headerTintColor: '#1B1A1F',

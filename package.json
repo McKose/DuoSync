@@ -13,6 +13,7 @@
     "@tanstack/query-async-storage-persister": "^5.104.1",
     "@tanstack/react-query": "^5.104.1",
     "@tanstack/react-query-persist-client": "^5.104.1",
+    "eslint-config-expo": "~57.0.2",
     "expo": "~57.0.27",
     "expo-battery": "~57.0.3",
     "expo-constants": "~57.0.21",
@@ -36,6 +37,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@types/react": "~19.2.2",
     "babel-preset-expo": "^57.0.14",
+    "eslint": "^9.39.5",
     "prettier-plugin-tailwindcss": "^0.5.14",
     "tailwindcss": "^3.4.19",
     "typescript": "~6.0.3"
@@ -48,7 +50,8 @@
     "typecheck": "tsc --noEmit",
     "test:db": "node supabase/tests/rls.test.mjs",
     "test:functions": "deno test supabase/functions/_shared",
-    "verify": "npm run typecheck && npm run test:db"
+    "verify": "npm run lint && npm run typecheck && npm run test:db",
+    "lint": "eslint ."
   },
   "private": true
 }

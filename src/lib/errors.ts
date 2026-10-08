@@ -25,7 +25,7 @@ const CODE_MESSAGES: Record<string, string> = {
   CHECKLIST_FULL: 'Bir plana en fazla 100 madde eklenebilir.',
 };
 
-const AUTH_MESSAGES: Array<[RegExp, string]> = [
+const AUTH_MESSAGES: [RegExp, string][] = [
   [/invalid login credentials/i, 'E-posta ya da şifre hatalı.'],
   [/email not confirmed/i, 'E-postanı henüz onaylamadın. Gelen kutunu kontrol et.'],
   [/user already registered/i, 'Bu e-posta ile zaten bir hesap var.'],

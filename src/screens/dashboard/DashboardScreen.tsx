@@ -1,7 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { signOut } from '@/api/auth';
 import { coupleSides, fetchCoupleProfiles, updatePresence } from '@/api/couple';
@@ -43,8 +43,17 @@ export function DashboardScreen() {
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState('');
   const [location, setLocation] = useState('');
-  const presets = useMemo(() => planDatePresets(), [showForm]);
+  // Presets are relative to "now": recompute every time the form opens, or a
+  // screen mounted at 19:00 would still offer "Bu akşam 20:00" at 21:00.
+  const [presets, setPresets] = useState(() => planDatePresets());
   const [dateIdx, setDateIdx] = useState(0);
+  const toggleForm = () => {
+    if (!showForm) {
+      setPresets(planDatePresets());
+      setDateIdx(0);
+    }
+    setShowForm(!showForm);
+  };
 
   const submitPlan = () => {
     if (!title.trim()) return;
@@ -103,13 +112,15 @@ export function DashboardScreen() {
           ))}
         </View>
         {sides.me.status === 'LOW_BATTERY' ? (
-          <Text className="text-xs text-ink-mute">Pilin %15'in altında olduğu için otomatik "Şarjı azalıyor" görünüyorsun.</Text>
+          <Text className="text-xs text-ink-mute">
+            {'Pilin %15\'in altında olduğu için otomatik "Şarjı azalıyor" görünüyorsun.'}
+          </Text>
         ) : null}
       </Card>
 
       <View className="mt-5 flex-row items-center justify-between">
         <Text className="text-xs font-bold uppercase tracking-wider text-ink-mute">Planlar</Text>
-        <Pressable onPress={() => setShowForm((v) => !v)} accessibilityRole="button" hitSlop={8}>
+        <Pressable onPress={toggleForm} accessibilityRole="button" hitSlop={8}>
           <Text className="text-sm font-semibold text-rose">{showForm ? 'Vazgeç' : '+ Yeni plan'}</Text>
         </Pressable>
       </View>

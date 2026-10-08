@@ -60,6 +60,8 @@ async function test(name, fn) {
 const A = '00000000-0000-0000-0000-00000000000a';
 const B = '00000000-0000-0000-0000-00000000000b';
 const C = '00000000-0000-0000-0000-00000000000c';
+const D = '00000000-0000-0000-0000-00000000000d';
+const E = '00000000-0000-0000-0000-00000000000e';
 
 /** Run SQL as an authenticated user (or anon/service when uid is a role name). */
 async function as(who, sql, params = []) {
@@ -414,6 +416,38 @@ await test('direct checklist overwrite denied; title update allowed', async () =
   await rejects(as(A, `update public.plans set checklist = '[]' where id = $1`, [planId]), /permission denied/);
   const r = await as(B, `update public.plans set title = 'Cuma — İtalyan' where id = $1 returning title`, [planId]);
   assert.equal(r.rows[0].title, 'Cuma — İtalyan');
+});
+
+console.log('Second couple');
+await test('joiner with own pending invite: invite discarded, pairing succeeds', async () => {
+  await su(`insert into auth.users (id, email) values ($1, 'd@example.com'), ($2, 'e@example.com')`, [D, E]);
+  const d = await as(D, `select * from public.create_pairing_code()`);
+  const e = await as(E, `select * from public.create_pairing_code()`);
+  const r = await as(E, `select * from public.pair_with_code($1)`, [d.rows[0].pairing_code]);
+  assert.equal(r.rows.length, 1);
+  assert.equal(r.rows[0].user_b_id, E);
+  const eOld = await su(`select count(*)::int n from public.couples where id = $1`, [e.rows[0].id]);
+  assert.equal(eOld.rows[0].n, 0);
+});
+
+await test('couple-to-couple isolation: D/E see none of A/B data and vice versa', async () => {
+  for (const t of ['court_cases', 'delayed_messages', 'pending_questions', 'plans']) {
+    const r = await as(D, `select count(*)::int n from public.${t}`);
+    assert.equal(r.rows[0].n, 0, `D sees ${t}`);
+  }
+  const prof = await as(D, `select id from public.profiles order by id`);
+  assert.deepEqual(prof.rows.map((x) => x.id), [D, E]);
+  await as(D, `select * from public.file_case('Karşı dava', 'OTHER', 'Bu dava yalnız D ve E içindir.')`);
+  const a = await as(A, `select count(*)::int n from public.court_cases where title = 'Karşı dava'`);
+  assert.equal(a.rows[0].n, 0);
+  await rejects(as(D, `select * from public.submit_defense($1, 'sızma')`, [caseId]), /CASE_NOT_FOUND/);
+  await rejects(as(D, `select 1 from public.upsert_checklist_item($1, $2::jsonb)`, [planId, JSON.stringify({ id: item, text: 'x', done: true, updated_at: new Date().toISOString() })]), /PLAN_NOT_FOUND/);
+});
+
+await test('paired users cannot join a third couple', async () => {
+  const c = await su(`select id from public.couples where user_a_id = $1`, [D]);
+  await rejects(as(A, `select * from public.pair_with_code('ZZZZZZ')`), /ALREADY_PAIRED/);
+  assert.ok(c.rows.length === 1);
 });
 
 console.log('Schedules');

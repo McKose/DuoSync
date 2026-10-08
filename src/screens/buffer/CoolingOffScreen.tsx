@@ -102,7 +102,7 @@ export function CoolingOffScreen() {
             ))
           )}
 
-          <SectionTitle>{partnerName}'den gelenler</SectionTitle>
+          <SectionTitle>{`${partnerName}'den gelenler`}</SectionTitle>
           {inbox.length === 0 ? (
             <EmptyState emoji="💌" title="Henüz mesaj yok" body="Soğuma süresini tamamlayan mesajlar burada görünür." />
           ) : (

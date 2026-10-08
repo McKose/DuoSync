@@ -11,12 +11,15 @@ export function useNow(intervalMs = 1000, enabled = true): number {
 
   useEffect(() => {
     if (!enabled) return;
-    setNow(Date.now());
+    // Async first tick: re-enabling must not show a stale value for a whole
+    // interval, but a synchronous setState in an effect cascades renders.
+    const first = setTimeout(() => setNow(Date.now()), 0);
     const id = setInterval(() => setNow(Date.now()), intervalMs);
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') setNow(Date.now());
     });
     return () => {
+      clearTimeout(first);
       clearInterval(id);
       sub.remove();
     };

@@ -7,6 +7,13 @@ import type { Database } from '@/types/database.types';
 
 type TableName = keyof Database['public']['Tables'];
 
+// supabase.channel(topic) returns the *existing* channel for a topic, and
+// removeChannel() only drops it after `await unsubscribe()`. A cleanup +
+// re-run in the same tick (StrictMode, dependency change, two screens with
+// the same subscription) would therefore receive the dying channel and end
+// up with no live subscription. Every effect run gets its own topic.
+let channelSeq = 0;
+
 interface Options<T extends TableName> {
   /** Unique per subscriber; also used as the channel topic suffix. */
   name: string;
@@ -48,9 +55,13 @@ export function useRealtimeSubscription<T extends TableName>({
   const keysRef = useRef(invalidate);
   const onChangeRef = useRef(onChange);
   const skipRef = useRef(skip);
-  keysRef.current = invalidate;
-  onChangeRef.current = onChange;
-  skipRef.current = skip;
+  // Sync latest callbacks after commit (never during render: a discarded
+  // concurrent render must not leak its values into live handlers).
+  useEffect(() => {
+    keysRef.current = invalidate;
+    onChangeRef.current = onChange;
+    skipRef.current = skip;
+  });
 
   useEffect(() => {
     if (!enabled) return;
@@ -61,7 +72,7 @@ export function useRealtimeSubscription<T extends TableName>({
     };
 
     const channel = supabase
-      .channel(`rt:${name}:${table}:${filter ?? 'all'}`)
+      .channel(`rt:${name}:${table}:${filter ?? 'all'}:${++channelSeq}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table, ...(filter ? { filter } : {}) },

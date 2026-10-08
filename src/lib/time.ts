@@ -35,7 +35,7 @@ export function formatDateTime(iso: string | null): string {
 }
 
 /** Quick plan-date presets (local time). */
-export function planDatePresets(now = new Date()): Array<{ label: string; value: string | null }> {
+export function planDatePresets(now = new Date()): { label: string; value: string | null }[] {
   const at = (base: Date, addDays: number, h: number) => {
     const d = new Date(base);
     d.setDate(d.getDate() + addDays);
@@ -44,7 +44,7 @@ export function planDatePresets(now = new Date()): Array<{ label: string; value:
   };
   const tonight = at(now, 0, 20);
   const daysToSat = (6 - now.getDay() + 7) % 7 || 7;
-  const presets: Array<{ label: string; value: string | null }> = [];
+  const presets: { label: string; value: string | null }[] = [];
   if (tonight.getTime() > now.getTime()) presets.push({ label: 'Bu akşam', value: tonight.toISOString() });
   presets.push({ label: 'Yarın akşam', value: at(now, 1, 20).toISOString() });
   presets.push({ label: 'Cumartesi', value: at(now, daysToSat, 20).toISOString() });

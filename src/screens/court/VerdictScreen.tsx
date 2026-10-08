@@ -19,6 +19,9 @@ import { usePairedContext } from '@/store/useCoupleStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Verdict'>;
 
+/** Mirrors the cap in claim_case_for_verdict() / list_claimable_cases(). */
+const MAX_VERDICT_ATTEMPTS = 5;
+
 export function VerdictScreen({ route }: Props) {
   const { caseId } = route.params;
   const { userId, coupleId } = usePairedContext();
@@ -102,7 +105,13 @@ export function VerdictScreen({ route }: Props) {
 
       {phase === 'AWAITING_VERDICT' || phase === 'DELIBERATING' || phase === 'DEFENSE_OVERDUE' ? (
         <Card className="mt-4 items-center bg-court-soft">
-          {c.last_error && phase === 'AWAITING_VERDICT' ? (
+          {c.verdict_attempts >= MAX_VERDICT_ATTEMPTS && phase === 'AWAITING_VERDICT' ? (
+            // Server-side cap reached: claim_case_for_verdict will refuse this
+            // case forever, so don't promise retries that can't happen.
+            <Text className="text-center text-sm text-ink">
+              Heyet bu davayı {MAX_VERDICT_ATTEMPTS} denemede karara bağlayamadı. Dilerseniz aynı konuyla yeni bir dava açabilirsiniz.
+            </Text>
+          ) : c.last_error && phase === 'AWAITING_VERDICT' ? (
             <>
               <Text className="mb-3 text-center text-sm text-ink">
                 Heyet toplanamadı. Sistem birkaç dakika içinde otomatik tekrar deneyecek.

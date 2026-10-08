@@ -48,8 +48,34 @@ async function registerForPush(userId: string): Promise<void> {
   await savePushToken(userId, token);
 }
 
+// A tap can arrive before the NavigationContainer is ready (cold start, or
+// the paired stack mounting in the same commit). Park it and replay onReady.
+let pendingRoute: Record<string, unknown> | null = null;
+// The OS keeps returning the last response until the app is killed; remember
+// which one we've handled so re-login / re-mount doesn't navigate again.
+let lastHandledId: string | null = null;
+
+/** Call from NavigationContainer onReady. */
+export function flushPendingNotificationRoute() {
+  if (!pendingRoute) return;
+  const data = pendingRoute;
+  pendingRoute = null;
+  routeFromNotification(data);
+}
+
+function handleResponse(resp: Notifications.NotificationResponse) {
+  const id = resp.notification.request.identifier;
+  if (id === lastHandledId) return;
+  lastHandledId = id;
+  routeFromNotification(resp.notification.request.content.data as Record<string, unknown>);
+}
+
 function routeFromNotification(data: Record<string, unknown> | undefined) {
-  if (!data || !navigationRef.isReady()) return;
+  if (!data) return;
+  if (!navigationRef.isReady()) {
+    pendingRoute = data;
+    return;
+  }
   const caseId = typeof data.case_id === 'string' ? data.case_id : null;
   switch (data.type) {
     case 'CASE_FILED':
@@ -76,12 +102,10 @@ export function usePushRegistration(userId: string | null, enabled: boolean) {
       if (__DEV__) console.warn('[push] registration failed', e);
     });
 
-    const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
-      routeFromNotification(resp.notification.request.content.data as Record<string, unknown>);
-    });
+    const sub = Notifications.addNotificationResponseReceivedListener(handleResponse);
     // Cold start from a notification tap.
     const last = Notifications.getLastNotificationResponse();
-    if (last) routeFromNotification(last.notification.request.content.data as Record<string, unknown>);
+    if (last) handleResponse(last);
 
     return () => sub.remove();
   }, [enabled, userId]);
