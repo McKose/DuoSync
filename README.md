@@ -44,6 +44,21 @@ npm run demo -- --web   # ya da tarayıcıda aç
 
 > Demo modu yalnızca geliştirme/test içindir; veriler şifrelenmeden cihazda durur ve iki gerçek kişiyi eşleştirmez.
 
+## Android APK (demo)
+
+Veritabanısız demo sürümünün telefona kurulabilen APK'sı GitHub Actions'ta derlenir (`.github/workflows/android-apk.yml`).
+
+**Yeni APK derletmek** (üçünden biri):
+- GitHub → **Actions** → **Android APK (demo)** → **Run workflow**
+- `git push origin main:apk-build`
+- `v*` etiketi push'la (ör. `v0.1.0-demo`). APK, bir GitHub Release'e de eklenir.
+
+**İndirmek:** İlgili çalıştırmanın sayfasında, en altta **Artifacts → duosync-demo-apk**. Zip'ten `DuoSync-demo-….apk` çıkar. Derleme ~15 dk sürer; artifact 30 gün saklanır.
+
+**Kurmak:** APK'yı telefona at, aç, **"Bilinmeyen kaynaklardan yüklemeye izin ver"** de.
+- arm64-v8a ve armeabi-v7a içerir, yani pratikte tüm telefonlarda çalışır. x86 emülatörlerde çalışmaz.
+- APK, React Native'in debug anahtarıyla imzalıdır. Yalnızca test içindir, Play Store'a yüklenemez. Mağaza için kendi anahtarınla AAB üretmek gerekir: `npx eas-cli@latest build -p android --profile production`.
+
 ## Kurulum
 
 ### 1. Uygulama
