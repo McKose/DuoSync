@@ -1,0 +1,88 @@
+name: Android APK (demo)
+
+# Builds an installable APK of the database-free demo mode.
+# - Manual: Actions → "Android APK (demo)" → Run workflow
+# - Tag push (v*): also attaches the APK to a GitHub Release
+#
+# The release variant is signed with the React Native debug keystore, so the
+# APK can be sideloaded for testing but is NOT suitable for the Play Store
+# (that needs an AAB signed with your own upload key — use EAS Build).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # only used to create a Release on tag pushes
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Build demo APK
+    # Pinned: the ubuntu-latest label moves to a new image on 2026-10-19.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      EXPO_PUBLIC_DEMO_MODE: '1'
+      NODE_ENV: production
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: npm ci
+
+      - name: Generate native Android project (CNG)
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Gradle assembleRelease
+        working-directory: android
+        # Two ABIs cover practically every Android phone in use and roughly
+        # halve build time and APK size versus all four.
+        run: >
+          ./gradlew assembleRelease --no-daemon
+          -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g"
+
+      - name: Collect APK
+        id: apk
+        run: |
+          src=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$src"
+          name="DuoSync-demo-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}.apk"
+          mkdir -p out && cp "$src" "out/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "### APK hazır: \`$name\` ($(du -h "out/$name" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "out/$name" | head -3 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duosync-demo-apk
+          path: out/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "DuoSync $GITHUB_REF_NAME (demo)" \
+                 --notes "Veritabanısız demo sürümü. Bilinmeyen kaynaklardan yüklemeye izin vererek kurun."
+          gh release upload "$GITHUB_REF_NAME" "out/${{ steps.apk.outputs.name }}" --clobber
