@@ -2,6 +2,7 @@ name: Android APK (demo)
 
 # Builds an installable APK of the database-free demo mode.
 # - Manual: Actions → "Android APK (demo)" → Run workflow
+# - Push to the `apk-build` branch: `git push origin main:apk-build`
 # - Tag push (v*): also attaches the APK to a GitHub Release
 #
 # The release variant is signed with the React Native debug keystore, so the
@@ -11,6 +12,7 @@ name: Android APK (demo)
 on:
   workflow_dispatch:
   push:
+    branches: [apk-build]
     tags: ['v*']
 
 permissions:
