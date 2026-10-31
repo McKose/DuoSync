@@ -96,6 +96,7 @@ await db.exec(
   mig('20261008000100_jobs_and_webhooks.sql').replace(/^create extension.*$/gim, '-- (stubbed) $&'),
 );
 await db.exec(mig('20261031000000_decision_wheel.sql'));
+await db.exec(mig('20261031000100_leave_couple.sql'));
 await su(
   `insert into auth.users (id, email, raw_user_meta_data) values
    ($1, 'ayse@example.com', '{"display_name":"Ayşe"}'), ($2, 'berk@example.com', '{}'), ($3, 'eve@example.com', '{}')`,
@@ -547,6 +548,63 @@ await test('partner can remove an option; draw covers every option; history capp
   assert.equal((await as(A, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 20);
 });
 
+console.log('Leave couple');
+const SHARED = ['court_cases', 'plans', 'delayed_messages', 'pending_questions', 'wheel_options', 'wheel_spins'];
+const sharedCounts = async (cid) => {
+  const out = {};
+  for (const t of SHARED) out[t] = (await su(`select count(*)::int n from public.${t} where couple_id = $1`, [cid])).rows[0].n;
+  return out;
+};
+
+await test('stranger cannot leave anyone’s couple; anon cannot call it', async () => {
+  await rejects(as(C, `select public.leave_couple()`), /NOT_PAIRED/);
+  await rejects(as('anon', `select public.leave_couple()`), /permission denied/);
+});
+
+await test('A leaves: couple + every shared row deleted, personal rows kept, only B notified', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  const de = (await su(`select id from public.couples where user_a_id = $1`, [D])).rows[0].id;
+  // An unsent cooling-off message must vanish without ever being released.
+  const pending = (await as(B, `select id from public.schedule_delayed_message('Gönderilmeyecek gizli mesaj', 15)`)).rows[0].id;
+  // Already due: if it survived the leave, the release job below would send it.
+  await su(`update public.delayed_messages set created_at = now() - interval '30 minutes', release_at = now() - interval '1 second' where id = $1`, [pending]);
+  const before = await sharedCounts(cid);
+  for (const t of ['court_cases', 'plans', 'delayed_messages', 'wheel_options', 'wheel_spins']) {
+    assert.ok(before[t] > 0, `fixture has no ${t}`);
+  }
+  const otherBefore = await sharedCounts(de);
+  const tokens = (await su(`select count(*)::int n from public.push_tokens where user_id in ($1, $2)`, [A, B])).rows[0].n;
+  const calls = (await su(`select coalesce(max(id), 0)::int n from net.calls`)).rows[0].n;
+
+  await as(A, `select public.leave_couple()`);
+
+  assert.equal((await su(`select count(*)::int n from public.couples where id = $1`, [cid])).rows[0].n, 0);
+  assert.deepEqual(await sharedCounts(cid), Object.fromEntries(SHARED.map((t) => [t, 0])));
+  assert.deepEqual(await sharedCounts(de), otherBefore);
+  assert.equal((await su(`select count(*)::int n from public.profiles where id in ($1, $2)`, [A, B])).rows[0].n, 2);
+  assert.equal((await su(`select count(*)::int n from public.push_tokens where user_id in ($1, $2)`, [A, B])).rows[0].n, tokens);
+
+  const sent = await su(`select body from net.calls where id > $1 order by id`, [calls]);
+  assert.deepEqual(sent.rows.map((r) => [r.body.type, r.body.user_id]), [['COUPLE_ENDED', B]]);
+  assert.ok(!JSON.stringify(sent.rows[0].body).includes('gizli'));
+  assert.equal((await as('service', `select public.release_due_messages() n`)).rows[0].n, 0);
+});
+
+await test('after leaving: neither side is paired, B cannot leave twice, nothing visible', async () => {
+  for (const who of [A, B]) {
+    assert.equal((await as(who, `select (public.my_active_couple()).id`)).rows[0].id, null);
+    for (const t of SHARED) assert.equal((await as(who, `select count(*)::int n from public.${t}`)).rows[0].n, 0, `${t} still visible`);
+  }
+  await rejects(as(B, `select public.leave_couple()`), /NOT_PAIRED/);
+  await rejects(as(B, `select * from public.file_case('Yeni dava', 'OTHER', 'Eşleşme yokken dava açılamaz.')`), /NOT_PAIRED/);
+});
+
+await test('both can pair again immediately', async () => {
+  const code = (await as(A, `select * from public.create_pairing_code()`)).rows[0].pairing_code;
+  const r = await as(B, `select * from public.pair_with_code($1)`, [code]);
+  assert.equal(r.rows[0].is_active, true);
+});
+
 console.log('Schedules');
 await test('cron jobs registered', async () => {
   const r = await su(`select name from cron.jobs order by name`);
@@ -560,7 +618,7 @@ const liveCheck = readFileSync(join(here, '..', 'verify', 'live_check.sql'), 'ut
 await db.exec(`
 create schema supabase_migrations;
 create table supabase_migrations.schema_migrations (version text primary key);
-insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000');
+insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000'), ('20261031000100');
 create view cron.job as
   select row_number() over (order by name)::bigint as jobid, name as jobname, schedule, command, true as active
   from cron.jobs;
@@ -580,7 +638,7 @@ const failingRows = async () =>
   (await su(liveCheck)).rows.filter((r) => !r.ok && r.n !== 2).map((r) => `${r.n} ${r.item}: ${r.detail}`);
 
 await test('healthy project: all checks pass', async () => {
-  assert.equal((await su(liveCheck)).rows.length, 13);
+  assert.equal((await su(liveCheck)).rows.length, 14);
   assert.deepEqual(await failingRows(), []);
 });
 
@@ -594,9 +652,10 @@ await test('misconfigurations are flagged on the right row', async () => {
       where name = 'duosync_project_url';
     create table public.leaky (id int);
     grant execute on function public.release_due_messages() to authenticated;
+    revoke select on public.court_cases from service_role;
   `);
   const nums = (await failingRows()).map((s) => Number(s.split(' ')[0]));
-  assert.deepEqual(nums, [4, 6, 7, 8, 9, 12]);
+  assert.deepEqual(nums, [4, 6, 7, 8, 9, 12, 14]);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

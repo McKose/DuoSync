@@ -23,10 +23,11 @@ pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash
 | `supabase/migrations/20261008000000_init_schema.sql` | Tables, enums, RLS, all RPCs (source of truth) |
 | `supabase/migrations/20261008000100_jobs_and_webhooks.sql` | pg_cron jobs, pg_net triggers → Edge Functions |
 | `supabase/migrations/20261031000000_decision_wheel.sql` | Decision wheel tables, RLS, RPCs (C1) |
+| `supabase/migrations/20261031000100_leave_couple.sql` | `leave_couple()`: unpair, cascade-delete all shared data (B2) |
 | `supabase/functions/ai-court-verdict/` | Claims case via RPC, calls Gemini, validates JSON, writes verdict |
 | `supabase/functions/send-push-notification/` | Expo push sender (internal-secret auth) |
 | `supabase/functions/_shared/verdict.ts` | Schema validation, fault normalization, injection fence (+ `.test.ts`) |
-| `supabase/tests/rls.test.mjs` | 54 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, decision wheel, live-check script |
+| `supabase/tests/rls.test.mjs` | 58 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, decision wheel, leave couple, live-check script |
 | `supabase/verify/live_check.sql` | Read-only post-setup check for the live project (A1/A2); run in SQL editor |
 | `src/api/*` | One module per domain; **first line of every fn: `if (IS_DEMO) return demo.…`** |
 | `src/demo/` | In-device fake backend mirroring server rules; partner bot "Deniz"; offline judge |
@@ -35,8 +36,8 @@ pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash
 | `src/lib/errors.ts` | P0001 error code → Turkish message map |
 | `src/types/database.types.ts` | Hand-maintained in generator shape; regenerate after schema change |
 | `src/lib/wheel.ts` | Wheel limits shared with the server + pure landing geometry (both phones stop on the same spot) |
-| `tests/demo/engine.test.ts` | 24 demo contract tests |
-| `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (12 steps) |
+| `tests/demo/engine.test.ts` | 26 demo contract tests |
+| `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (13 steps) |
 | `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e) · demo APK build (push to `apk-build` branch) |
 
 ### Schema objects
@@ -46,7 +47,7 @@ delayed_messages, pending_questions, wheel_options, wheel_spins`. Enums: `case_s
 Client RPCs: `create_pairing_code, pair_with_code, my_active_couple, update_my_presence,
 file_case, submit_defense, upsert_checklist_item, schedule_delayed_message,
 cancel_delayed_message, ask_question, answer_question, add_wheel_option,
-remove_wheel_option, spin_wheel`.
+remove_wheel_option, spin_wheel, leave_couple`.
 Service-only RPCs: `claim_case_for_verdict, complete_verdict, fail_verdict,
 list_claimable_cases, release_due_messages`.
 Cron: `duosync-release-messages` (1 min), `duosync-court-sweep` (10 min),
@@ -77,7 +78,8 @@ Cron: `duosync-release-messages` (1 min), `duosync-court-sweep` (10 min),
 ## Environment cautions
 - The Supabase MCP connected to this account points at a **different project**
   (`jvkytncwedjcvssilhih`, gym app). **Do not apply DuoSync migrations or deploy
-  functions there.** DuoSync needs its own project (ROADMAP task A1).
+  functions there.** DuoSync has its own project since 2026-10-31: ref `gfjkepyaubdstinqgtqw`.
+  Before any live call, check `get_project_url` returns that ref.
 - Never commit `.env`, API keys or Vault secrets. Vault secrets are created by hand
   in the SQL editor (see README §Kurulum).
 - Dependencies: `EXPO_OFFLINE=1 npx expo install <pkg>` for SDK-matched versions.

@@ -259,6 +259,18 @@ await step('offline simulation shows banner', async () => {
   await page.click('[aria-label="Çevrimdışı simülasyonu"]');
 });
 
+await step('leave couple: confirm → shared data gone, back to pairing', async () => {
+  await back();
+  await click('Masa');
+  await click('Eşleşmeyi sonlandır');
+  await waitText('kalıcı olarak silinir'); // in-app confirm modal
+  await shot('leave-confirm');
+  await click('Evet, sil');
+  await waitText('Partnerini bağla', 15000);
+  await shot('after-leave');
+  if (await hasText('Cuma akşamı yemek')) throw new Error('old couple data still rendered after leaving');
+});
+
 console.log(results.join('\n'));
 console.log(errors.length ? `\nBrowser errors (${errors.length}):\n${[...new Set(errors)].join('\n')}` : '\nNo browser errors.');
 await browser.close();

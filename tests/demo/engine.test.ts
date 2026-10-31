@@ -293,6 +293,32 @@ describe('decision wheel', () => {
   });
 });
 
+describe('leave couple', () => {
+  test('I leave: couple and every shared row are gone; I can pair again', async () => {
+    const { be, couple, mem } = await paired();
+    await be.spinWheel();
+    await be.leaveCouple();
+    assert.equal(await be.fetchMyCouple(DEMO_ME_ID), null);
+    for (const call of [be.listCases, be.listPlans, be.listMessages, be.listQuestions, be.listWheelOptions]) {
+      assert.equal(await codeOf(call(couple.id)), 'NOT_PAIRED');
+    }
+    assert.ok(![...mem.values()].some((v) => v.includes(couple.id)), 'old couple left in persisted demo state');
+    assert.equal(await codeOf(be.leaveCouple()), 'NOT_PAIRED');
+    assert.equal((await be.createPairingCode()).is_active, false);
+  });
+
+  test('partner leaves: my session is notified and lands unpaired', async () => {
+    const { be } = await paired();
+    let hits = 0;
+    const off = be.subscribe('couples', () => hits++);
+    await be.panel.partnerLeaves();
+    off();
+    assert.ok(hits > 0);
+    assert.equal(await be.fetchMyCouple(DEMO_ME_ID), null);
+    assert.equal(await codeOf(be.panel.partnerLeaves()), 'NOT_PAIRED');
+  });
+});
+
 describe('presence', () => {
   test('LOW_BATTERY auto only over NORMAL; manual status sticks', async () => {
     const { be } = await paired();

@@ -20,6 +20,7 @@ const ALLOWED_TYPES = new Set([
   'MESSAGE_RELEASED',
   'QUESTION_ASKED',
   'QUESTION_ANSWERED',
+  'COUPLE_ENDED',
 ]);
 
 interface PushRequest {

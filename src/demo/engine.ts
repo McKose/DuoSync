@@ -423,6 +423,21 @@ export function createDemoBackend(deps: DemoDeps) {
   };
 
   // ---------------------------------------------------------------------------
+  // unpair (mirrors leave_couple: the couple and every shared row are deleted)
+  // ---------------------------------------------------------------------------
+  function endCouple(couple: Couple) {
+    const other = <T extends { couple_id: string }>(rows: T[]) => rows.filter((r) => r.couple_id !== couple.id);
+    state.cases = other(state.cases);
+    state.messages = other(state.messages);
+    state.questions = other(state.questions);
+    state.plans = other(state.plans);
+    state.wheelOptions = other(state.wheelOptions);
+    state.wheelSpins = other(state.wheelSpins);
+    state.couple = null;
+    touch('couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans', 'wheel_options', 'wheel_spins');
+  }
+
+  // ---------------------------------------------------------------------------
   // decision wheel (mirrors spin_wheel)
   // ---------------------------------------------------------------------------
   function drawSpin(couple: Couple, spunBy: string): WheelSpin {
@@ -821,6 +836,10 @@ export function createDemoBackend(deps: DemoDeps) {
       });
     },
 
+    async leaveCouple(): Promise<void> {
+      return op(() => endCouple(activeCouple()));
+    },
+
     // ---- decision wheel ----
     async listWheelOptions(coupleId: string): Promise<WheelOption[]> {
       return op(() => {
@@ -1091,6 +1110,8 @@ export function createDemoBackend(deps: DemoDeps) {
         touch('plans');
         return true;
       }),
+    /** Partner ends the couple: you land on the pairing screen with nothing left behind. */
+    partnerLeaves: () => local(() => endCouple(activeCouple())),
     /** Partner spins: the open wheel screen must animate to the same result. */
     partnerSpinsWheel: () =>
       local(() => {

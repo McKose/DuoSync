@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-10-31 (first Claude Code session: baseline re-verified, target decided, A1 check script, C1 decision wheel).
+Last updated: 2026-10-31 (first Claude Code session: baseline re-verified, target decided, A1 check script, C1 decision wheel, B2 unpair).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -16,6 +16,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-10-30 | Audit + roadmap: typecheck 0, test:db 43/43, test:demo 20/20 re-run. **No live backend exists**; never run on a physical device | This roadmap |
 | 2026-10-31 | Claude Code session start: full DoD re-run in a clean container (lint 0, typecheck 0, test:functions 7/7, test:demo 20/20). Decision §3 = **personal use**. Added `supabase/verify/live_check.sql` (13 read-only checks for A1 + A2 pre-checks, secrets never selected) + 2 PGlite tests (healthy project passes; 6 injected misconfigs flagged on the right row) | test:db 45/45; A1 waiting on user |
 | 2026-10-31 | **C1 decision wheel** built while A1 waits on the user: migration `20261031000000_decision_wheel.sql` (`wheel_options`, `wheel_spins`, RPCs `add_wheel_option` / `remove_wheel_option` / `spin_wheel`, SELECT-only RLS, Realtime), demo mirror + panel action "Deniz çarkı çevirsin", `DecisionWheelScreen` built with core `Animated` + plain Views (no SVG/Reanimated → no new device risk ahead of A4). Mutation-tested: dropping the cooldown or granting direct INSERT each fails a test. Fixed during E2E review: labels were oriented for the unrotated wheel and read upside down at rest | test:db 54/54, test:demo 24/24, E2E 12/12 |
+| 2026-10-31 | User created the DuoSync Supabase project (`gfjkepyaubdstinqgtqw`); connector still points at the gym project, so nothing deployed yet. Decisions recorded: C3 rules (12 h, max 2), B2 = delete. **B2 unpair** built: migration `20261031000100_leave_couple.sql`, `COUPLE_ENDED` push type, Dashboard "Eşleşmeyi sonlandır" + confirm, demo mirror + panel action, both devices drop cached couple data and queued edits. `live_check.sql` row 14 added (Data API table grants), because the migrations rely on Supabase's default grants | test:db 58/58, test:demo 26/26, E2E 13/13 |
 
 ## 2. Current state
 
@@ -29,8 +30,9 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | Pasif pil / durum senkronu | ✅ |
 | **Acil durum alarmı (sessiz modu aşan)** | ❌ not started |
 | İstinaf (`APPEALED`) | ❌ enum only, no rules defined |
-| Hesap silme / eşleşme bozma | ❌ not started |
-| Live Supabase project | ❌ none |
+| Eşleşme bozma (B2) | ✅ code + tests, ❌ not live yet; rule #3 caveat open (see B2) |
+| Hesap silme (B1) | ⏸ deferred (personal use) |
+| Live Supabase project | 🟡 created (`gfjkepyaubdstinqgtqw`, 2026-10-31), not yet migrated/deployed |
 | Physical device run | ❌ never |
 
 ## 3. Product decisions
@@ -63,7 +65,11 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   `GEMINI_API_KEY`, `INTERNAL_WEBHOOK_SECRET`, optional `GEMINI_MODEL`; deploy both functions.
   *Accept:* `list_migrations` shows all 3 migrations; `cron.job` has 3 DuoSync jobs; both functions ACTIVE.
   Requires user: project creation, API keys.
-  *Verify:* ≥ 10 min after deploy run `supabase/verify/live_check.sql` in the SQL editor → all 13 rows
+  Recommended at project creation (2026-10-31; which ones were actually chosen is unverified — check in A1):
+  region `eu-central-1`; Data API **on**; "Automatically expose new tables" **on** (migrations narrow the
+  default grants, they do not grant from scratch — `live_check` row 14 catches it if off); automatic RLS on
+  (harmless, every table enables RLS itself); GitHub integration not connected for now.
+  *Verify:* ≥ 10 min after deploy run `supabase/verify/live_check.sql` in the SQL editor → all 14 rows
   `ok = true` (row 8 proves URL + secret + deploy end-to-end via the sweep's 202); `npx supabase functions list` → both ACTIVE.
 - [ ] **A2. Advisor audit** (0.5 d)
   Run security + performance advisors; fix every ERROR/WARN in a new migration; mirror in tests.
@@ -94,6 +100,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   | Battery | update only on foreground; none while backgrounded |
   | Third user | sees nothing, cannot write |
   | Decision wheel: A spins while B has the screen open | B animates to the same segment and label; B's spin within 10 s → `SPIN_COOLDOWN` |
+  | Unpair: A leaves while B has the app open | B lands on the pairing screen, gets `COUPLE_ENDED` push; B's WS frames: record which `delayed_messages` DELETE events arrive (see B2 caveat) |
   *Accept:* all rows pass; results table pasted here.
 
 ### Phase B — Lifecycle & security (store-blocking)
@@ -101,8 +108,22 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 - [ ] **B1. Account deletion** (1 d) — *deferred (personal use)* — RPC to tear down couple data + Edge Function calling
   `auth.admin.deleteUser`; in-app entry point. Required by Apple 5.1.1(v) and Google Play.
   *Accept:* deleting user A leaves no A rows; partner B returns cleanly to pairing screen; RLS test added; demo mirrored.
-- [ ] **B2. Unpair / leave couple** (1 d) — design together with B1 (same data lifecycle).
-  Decide: are shared rows (cases, plans) deleted or archived? Ask user.
+- [x] **B2. Unpair / leave couple** (1 d) — done 2026-10-31 (decision: shared data is deleted).
+  *Delivered:* `leave_couple()` locks + re-checks the couple (both tapping at once → second gets `NOT_PAIRED`),
+  deletes it → cascade removes cases, plans, messages (incl. unsent, never released), questions, wheel data;
+  profiles, push tokens, pairing attempts stay; both can pair again at once. `COUPLE_ENDED` push to the partner
+  carries no detail. Clients: `useCoupleSession` drops every cached query + queued mutation when the active couple
+  disappears (persisted cache included). Tests: cascade/kept rows/push target (mutation-tested)/stranger/anon/
+  other couple untouched/re-pair; demo + E2E.
+  **Open decision — rule #3 vs. Realtime DELETE.** Per Supabase docs, DELETE events are neither RLS-checked nor
+  filterable: every subscriber of `delayed_messages` receives one frame per deleted row, primary key only.
+  At unpair, B therefore receives DELETE frames for A's PENDING/CANCELLED messages too, and by diffing against
+  the SENT ids B knows could count messages it never saw. No content leaks, but it is a "deleted marker".
+  Options: (a) accept and document — only visible in raw WS frames at the moment of unpair; (b) move
+  `delayed_messages` from postgres_changes to Realtime Broadcast from the database with per-recipient private
+  channels (≈ 1 d, the robust fix); (c) unpair wipes + orphans unsent rows (FK `set null`) and a later job
+  purges them (cheaper, but leaves sender/recipient metadata until the purge). Needs the user's call; verify
+  the actual frames in A5 first.
 - [ ] **B3. KVKK notice + explicit consent screen** (1 d + legal) — *deferred (personal use)* — pleas are sent to Google
   (cross-border transfer, KVKK art. 9). Block court usage until consent recorded per user.
   Legal text must come from the user/lawyer; Claude provides the mechanism only.

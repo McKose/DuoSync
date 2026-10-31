@@ -63,6 +63,7 @@ export function DemoPanelScreen() {
     { label: `${DEMO_PARTNER_NAME} soru sorsun`, hint: 'Kasa sekmesi', run: demo.panel.partnerAsksQuestion },
     { label: `${DEMO_PARTNER_NAME} ilk maddeyi işaretlesin`, hint: 'Açık plan ekranında anlık değişmeli', run: demo.panel.partnerTogglesFirstItem },
     { label: `${DEMO_PARTNER_NAME} çarkı çevirsin`, hint: 'Açık çark ekranı aynı sonuca dönmeli', run: demo.panel.partnerSpinsWheel },
+    { label: `${DEMO_PARTNER_NAME} eşleşmeyi bitirsin`, hint: 'Ortak veriler silinir, eşleşme ekranına dönersin', run: demo.panel.partnerLeaves },
   ];
 
   const presenceActions: Action[] = [

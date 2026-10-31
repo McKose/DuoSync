@@ -4,7 +4,7 @@
 -- Read-only. Run in the SQL editor of the DuoSync project (never the gym
 -- project) after README §Kurulum: `db push`, both Vault secrets,
 -- `secrets set`, `functions deploy`. Wait >= 10 min after the deploy so the
--- court sweep has fired at least once. Every row must show ok = true.
+-- court sweep has fired at least once. All 14 rows must show ok = true.
 --
 -- Secret values are never returned; only presence and shape are tested.
 -- "relation ... does not exist" means a prerequisite is missing:
@@ -20,7 +20,7 @@ expected_tables(name) as (
            ('wheel_options'), ('wheel_spins')
 ),
 mig as (
-    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000')) as n,
+    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000', '20261031000100')) as n,
            coalesce(string_agg(version, ', ' order by version), 'none') as versions
     from supabase_migrations.schema_migrations
 ),
@@ -91,6 +91,23 @@ svc_exec as (
                         'list_claimable_cases', 'release_due_messages')
       and has_function_privilege('authenticated', p.oid, 'execute')
 ),
+-- The migrations narrow Supabase's default Data API grants instead of granting
+-- from scratch; with "Automatically expose new tables" off these are missing
+-- and every client query fails with "permission denied".
+grants as (
+    select string_agg(x.who || ' ' || x.priv || ' ' || x.tbl, ', ' order by x.who, x.tbl) as missing
+    from (values
+        ('authenticated', 'select', 'profiles'), ('authenticated', 'select', 'push_tokens'),
+        ('authenticated', 'select', 'couples'), ('authenticated', 'select', 'court_cases'),
+        ('authenticated', 'select', 'delayed_messages'), ('authenticated', 'select', 'pending_questions'),
+        ('authenticated', 'select', 'plans'), ('authenticated', 'insert', 'plans'),
+        ('authenticated', 'select', 'wheel_options'), ('authenticated', 'select', 'wheel_spins'),
+        ('service_role', 'select', 'court_cases'), ('service_role', 'select', 'push_tokens'),
+        ('service_role', 'delete', 'push_tokens')
+    ) as x(who, priv, tbl)
+    where to_regclass('public.' || x.tbl) is null
+       or not has_table_privilege(x.who, 'public.' || x.tbl, x.priv)
+),
 definer_path as (
     select string_agg(n.nspname || '.' || p.proname, ', ' order by n.nspname, p.proname) as list
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -99,7 +116,7 @@ definer_path as (
                       where cfg in ('search_path=""', 'search_path='))
 )
 select n, item, ok, detail from (
-    select 1 as n, 'migrations applied (3)' as item, mig.n = 3 as ok, mig.versions as detail from mig
+    select 1 as n, 'migrations applied (4)' as item, mig.n = 4 as ok, mig.versions as detail from mig
     union all
     select 2, 'extensions pg_cron + pg_net', ext.n = 2, ext.list from ext
     union all
@@ -146,5 +163,9 @@ select n, item, ok, detail from (
     union all
     select 13, 'SECURITY DEFINER fns pin search_path = ''''', definer_path.list is null,
            coalesce(definer_path.list, 'none') from definer_path
+    union all
+    select 14, 'Data API grants present', grants.missing is null,
+           coalesce('missing: ' || grants.missing || ' | was "Automatically expose new tables" disabled?', 'all present')
+    from grants
 ) checks
 order by n;

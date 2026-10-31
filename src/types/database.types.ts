@@ -444,6 +444,7 @@ export type Database = {
         SetofOptions: { from: '*'; to: 'wheel_options'; isOneToOne: true; isSetofReturn: false };
       };
       remove_wheel_option: { Args: { p_option_id: string }; Returns: undefined };
+      leave_couple: { Args: never; Returns: undefined };
       spin_wheel: {
         Args: never;
         Returns: WheelSpinRow;

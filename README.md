@@ -70,7 +70,7 @@ cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ### 2. Supabase
 ```bash
 npx supabase link --project-ref <ref>
-npx supabase db push                          # üç migration
+npx supabase db push                          # dört migration
 
 # Vault (SQL editöründe, bir kez — git'e girmesin diye migration'da değil):
 #   select vault.create_secret('https://<ref>.supabase.co', 'duosync_project_url');
@@ -88,7 +88,7 @@ npx supabase functions deploy ai-court-verdict send-push-notification
 
 `duosync_internal_secret` için `openssl rand -hex 32` yeterli; aynı dize `INTERNAL_WEBHOOK_SECRET` olarak da girilmeli.
 
-**Kurulum doğrulaması:** deploy'dan ≥ 10 dk sonra (mahkeme süpürmesi bir kez çalışmış olsun) `supabase/verify/live_check.sql` dosyasını SQL editöründe çalıştırın; 13 satırın hepsi `ok = true` olmalı. Satır 8 (webhook gidiş-dönüş) hatalıysa detay sütunu nedeni söyler: 401 = gateway JWT doğrulaması açık, 403 = iki secret farklı, 404 = fonksiyon deploy edilmemiş veya proje URL'si yanlış. Fonksiyonların `ACTIVE` olduğunu `npx supabase functions list` ile kontrol edin.
+**Kurulum doğrulaması:** deploy'dan ≥ 10 dk sonra (mahkeme süpürmesi bir kez çalışmış olsun) `supabase/verify/live_check.sql` dosyasını SQL editöründe çalıştırın; 14 satırın hepsi `ok = true` olmalı. Satır 8 (webhook gidiş-dönüş) hatalıysa detay sütunu nedeni söyler: 401 = gateway JWT doğrulaması açık, 403 = iki secret farklı, 404 = fonksiyon deploy edilmemiş veya proje URL'si yanlış. Fonksiyonların `ACTIVE` olduğunu `npx supabase functions list` ile kontrol edin.
 
 ### 3. Push bildirimleri
 ```bash
@@ -110,9 +110,9 @@ npx expo start --dev-client
 |---|---|---|
 | `npm run lint` | ESLint (`eslint-config-expo` + react-hooks kuralları, `exhaustive-deps` hata seviyesinde) | ✅ 0 bulgu |
 | `npm run typecheck` | Tüm istemci kodu, `database.types.ts` ile RPC/tablo tipleri | ✅ 0 hata |
-| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 54/54 |
-| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, karar çarkı, hata kodları) + çark geometrisi | ✅ 24/24 |
-| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → karar çarkı (ben + partner çevirir) → dava/savunma/karar → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı | ✅ 12/12, 0 tarayıcı hatası |
+| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 58/58 |
+| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, karar çarkı, eşleşmeyi bozma, hata kodları) + çark geometrisi | ✅ 26/26 |
+| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → karar çarkı (ben + partner çevirir) → dava/savunma/karar → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı → eşleşmeyi bozma | ✅ 13/13, 0 tarayıcı hatası |
 | `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
 | `npx expo export --platform android` | Metro + NativeWind + Reanimated 4 + Hermes bundle | ✅ 4.1 MB `.hbc` |
 
@@ -153,6 +153,7 @@ Client (Expo)                         Supabase
 | Pasif pil | `AppState` background/inactive→active geçişinde tek okuma + throttle (2 dk / %5). Arka plan görevi, listener, polling yok | — |
 | Offline checklist | İstemci UUID'li öğeler, öğe başına LWW (`updated_at`), sunucuda satır kilitli atomik merge, saat kayması koruması (+1 dk tavan), tombstone silme; TanStack paused mutation + AsyncStorage persist ile yeniden başlatmaya dayanıklı | ✅ |
 | Karar çarkı | Sonucu `spin_wheel()` (SECURITY DEFINER) `gen_random_uuid()` ile seçer ve seçenek listesinin anlık görüntüsüyle birlikte saklar; istemci yalnız okur ve animasyonla o satıra döner. Duruş noktası spin id'sinden türetilir → iki telefonda aynı yer. Çift başına 10 sn bekleme, en çok 12 seçenek, büyük/küçük harf duyarsız tekrar engeli; `CHECK` ile sonuç = anlık görüntüdeki etiket | ✅ |
+| Eşleşmeyi bozma | `leave_couple()` çift satırını kilitleyip siler; cascade ile davalar, planlar, mesajlar (gönderilmemişler dahil, push'suz), sorular ve çark silinir. Profil ve push token kalır, iki taraf hemen yeniden eşleşebilir. Partnere içeriksiz bir push gider; iki cihaz da önbellekteki ortak veriyi ve kuyruktaki düzenlemeleri atar | ✅ |
 
 ---
 
@@ -178,7 +179,7 @@ Client (Expo)                         Supabase
 
 - **İstinaf (`APPEALED`)**: enum'da duruyor, akış tanımlanmadığı için UI/RPC yok.
 - **Sessiz modu aşan acil alarm**: proje açıklamasında var, spec'te yok. iOS'ta Apple'ın *Critical Alerts* entitlement onayı, Android'de `USE_FULL_SCREEN_INTENT`/DND erişimi gerektirir — ayrı bir iş kalemi (ROADMAP C2). Karar çarkı 2026-10-31'de eklendi (C1).
-- **Ayrılma / eşleşmeyi bozma** akışı.
+- **Hesap silme** (B1): kişisel kullanım kararıyla ertelendi. Eşleşmeyi bozma 2026-10-31'de eklendi (B2).
 
 ## Bilinen riskler
 
