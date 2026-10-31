@@ -44,8 +44,12 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 
 A1 setup is done **by the user** (project creation, keys, `db push`, deploy); Claude verifies.
 
-Still open: appeal (C3) rules — who may appeal, how many times, within what window.
-B2: on unpair, are shared rows (cases, plans) deleted or archived?
+**C3 appeal rules — DECIDED 2026-10-31 (user):** 12 h appeal window, at most 2 appeals.
+Still open before building C3: per case or per person; who may appeal (either party vs. the one found
+more at fault); can the other side reply (proposed: yes, 12 h, then judged anyway); does a new verdict
+replace or stack (proposed: history kept, latest one counts).
+
+**B2 data lifecycle — DECIDED 2026-10-31 (user):** on unpair all shared data is **deleted**.
 
 ## 4. Tasks
 
