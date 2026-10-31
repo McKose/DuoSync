@@ -456,4 +456,50 @@ await test('cron jobs registered', async () => {
   assert.deepEqual(r.rows.map((x) => x.name), ['duosync-court-sweep', 'duosync-prune-pairing-attempts', 'duosync-release-messages']);
 });
 
+// supabase/verify/live_check.sql reads the real catalog names; add those on
+// top of the stubs and simulate a correctly configured project.
+console.log('Live check script');
+const liveCheck = readFileSync(join(here, '..', 'verify', 'live_check.sql'), 'utf8');
+await db.exec(`
+create schema supabase_migrations;
+create table supabase_migrations.schema_migrations (version text primary key);
+insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100');
+create view cron.job as
+  select row_number() over (order by name)::bigint as jobid, name as jobname, schedule, command, true as active
+  from cron.jobs;
+create table cron.job_run_details (jobid bigint, status text, return_message text, start_time timestamptz);
+insert into cron.job_run_details
+  select jobid, 'succeeded', '1 row', now() - interval '30 seconds' from cron.job;
+create table net._http_response (
+  id bigint generated always as identity, status_code int, content text,
+  timed_out bool default false, error_msg text, created timestamptz default now());
+insert into net._http_response (status_code, content) values (202, '{"accepted":true,"task":"sweep"}');
+update vault.decrypted_secrets set decrypted_secret = repeat('ab', 32) where name = 'duosync_internal_secret';
+update vault.decrypted_secrets set decrypted_secret = 'https://abcdefghijklmnopqrst.supabase.co'
+  where name = 'duosync_project_url';
+`);
+// Check 2 (pg_cron/pg_net in pg_extension) cannot pass on PGlite: both are stubbed schemas.
+const failingRows = async () =>
+  (await su(liveCheck)).rows.filter((r) => !r.ok && r.n !== 2).map((r) => `${r.n} ${r.item}: ${r.detail}`);
+
+await test('healthy project: all checks pass', async () => {
+  assert.equal((await su(liveCheck)).rows.length, 13);
+  assert.deepEqual(await failingRows(), []);
+});
+
+await test('misconfigurations are flagged on the right row', async () => {
+  await db.exec(`
+    insert into net._http_response (status_code, content) values (403, '{"error":"FORBIDDEN"}');
+    insert into cron.job_run_details
+      select jobid, 'failed', 'ERROR: boom', now() from cron.job where jobname = 'duosync-court-sweep';
+    update vault.decrypted_secrets set decrypted_secret = 'short' where name = 'duosync_internal_secret';
+    update vault.decrypted_secrets set decrypted_secret = 'https://abc.supabase.co/functions/v1'
+      where name = 'duosync_project_url';
+    create table public.leaky (id int);
+    grant execute on function public.release_due_messages() to authenticated;
+  `);
+  const nums = (await failingRows()).map((s) => Number(s.split(' ')[0]));
+  assert.deepEqual(nums, [4, 6, 7, 8, 9, 12]);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

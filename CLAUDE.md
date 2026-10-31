@@ -25,7 +25,8 @@ pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash
 | `supabase/functions/ai-court-verdict/` | Claims case via RPC, calls Gemini, validates JSON, writes verdict |
 | `supabase/functions/send-push-notification/` | Expo push sender (internal-secret auth) |
 | `supabase/functions/_shared/verdict.ts` | Schema validation, fault normalization, injection fence (+ `.test.ts`) |
-| `supabase/tests/rls.test.mjs` | 43 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation |
+| `supabase/tests/rls.test.mjs` | 45 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, live-check script |
+| `supabase/verify/live_check.sql` | Read-only post-setup check for the live project (A1/A2); run in SQL editor |
 | `src/api/*` | One module per domain; **first line of every fn: `if (IS_DEMO) return demo.…`** |
 | `src/demo/` | In-device fake backend mirroring server rules; partner bot "Deniz"; offline judge |
 | `src/hooks/` | Query/mutation hooks, `useRealtimeSubscription`, `useBatterySync`, `usePushRegistration` |
