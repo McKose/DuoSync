@@ -22,10 +22,11 @@ pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash
 |---|---|
 | `supabase/migrations/20261008000000_init_schema.sql` | Tables, enums, RLS, all RPCs (source of truth) |
 | `supabase/migrations/20261008000100_jobs_and_webhooks.sql` | pg_cron jobs, pg_net triggers → Edge Functions |
+| `supabase/migrations/20261031000000_decision_wheel.sql` | Decision wheel tables, RLS, RPCs (C1) |
 | `supabase/functions/ai-court-verdict/` | Claims case via RPC, calls Gemini, validates JSON, writes verdict |
 | `supabase/functions/send-push-notification/` | Expo push sender (internal-secret auth) |
 | `supabase/functions/_shared/verdict.ts` | Schema validation, fault normalization, injection fence (+ `.test.ts`) |
-| `supabase/tests/rls.test.mjs` | 45 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, live-check script |
+| `supabase/tests/rls.test.mjs` | 54 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, decision wheel, live-check script |
 | `supabase/verify/live_check.sql` | Read-only post-setup check for the live project (A1/A2); run in SQL editor |
 | `src/api/*` | One module per domain; **first line of every fn: `if (IS_DEMO) return demo.…`** |
 | `src/demo/` | In-device fake backend mirroring server rules; partner bot "Deniz"; offline judge |
@@ -33,17 +34,19 @@ pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash
 | `src/store/useCoupleStore.ts` | Zustand: session, profile, couple |
 | `src/lib/errors.ts` | P0001 error code → Turkish message map |
 | `src/types/database.types.ts` | Hand-maintained in generator shape; regenerate after schema change |
-| `tests/demo/engine.test.ts` | 20 demo contract tests |
-| `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (11 steps) |
+| `src/lib/wheel.ts` | Wheel limits shared with the server + pure landing geometry (both phones stop on the same spot) |
+| `tests/demo/engine.test.ts` | 24 demo contract tests |
+| `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (12 steps) |
 | `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e) · demo APK build (push to `apk-build` branch) |
 
 ### Schema objects
 Tables: `profiles, couples, pairing_attempts, push_tokens, court_cases, plans,
-delayed_messages, pending_questions`. Enums: `case_status` (incl. `DELIBERATING`,
+delayed_messages, pending_questions, wheel_options, wheel_spins`. Enums: `case_status` (incl. `DELIBERATING`,
 `APPEALED` unused), `message_status` (`PENDING/SENT/CANCELLED`), `partner_status`.
 Client RPCs: `create_pairing_code, pair_with_code, my_active_couple, update_my_presence,
 file_case, submit_defense, upsert_checklist_item, schedule_delayed_message,
-cancel_delayed_message, ask_question, answer_question`.
+cancel_delayed_message, ask_question, answer_question, add_wheel_option,
+remove_wheel_option, spin_wheel`.
 Service-only RPCs: `claim_case_for_verdict, complete_verdict, fail_verdict,
 list_claimable_cases, release_due_messages`.
 Cron: `duosync-release-messages` (1 min), `duosync-court-sweep` (10 min),

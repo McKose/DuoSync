@@ -4,7 +4,8 @@
 // enough that every screen, error and edge case can be tested without a
 // database: same validation and error codes, defense lock + 24h timeout,
 // RLS-equivalent visibility for the cooling-off room (silent cancel), per-item
-// LWW checklist merge, presence/LOW_BATTERY logic and pairing rules.
+// LWW checklist merge, presence/LOW_BATTERY logic, pairing rules and the
+// server-drawn decision wheel (limits, duplicate guard, couple-wide cooldown).
 //
 // A simulated partner ("Deniz") reacts on a timer so two-person flows work
 // with one phone. Dependencies (storage, clock, uuid, sleep) are injected so
@@ -12,6 +13,7 @@
 
 import { mergeChecklistItem, parseChecklist } from '../lib/checklist';
 import { AppError } from '../lib/errors';
+import { WHEEL_COOLDOWN_MS, WHEEL_HISTORY, WHEEL_LABEL_MAX, WHEEL_MAX_OPTIONS } from '../lib/wheel';
 import type {
   ChecklistItem,
   Couple,
@@ -22,6 +24,8 @@ import type {
   PendingQuestion,
   Plan,
   Profile,
+  WheelOption,
+  WheelSpin,
 } from '../types/database.types';
 import { demoVerdict } from './judge';
 
@@ -44,7 +48,15 @@ export const PARTNER_DELAYS = {
   answer: 6_000,
 } as const;
 
-export type DemoTable = 'couples' | 'court_cases' | 'delayed_messages' | 'pending_questions' | 'plans' | 'profiles';
+export type DemoTable =
+  | 'couples'
+  | 'court_cases'
+  | 'delayed_messages'
+  | 'pending_questions'
+  | 'plans'
+  | 'profiles'
+  | 'wheel_options'
+  | 'wheel_spins';
 type Channel = DemoTable | 'auth' | 'settings';
 
 export interface DemoSettings {
@@ -73,6 +85,8 @@ interface DemoState {
   messages: DelayedMessage[];
   questions: PendingQuestion[];
   plans: Plan[];
+  wheelOptions: WheelOption[];
+  wheelSpins: WheelSpin[];
   scheduled: ScheduledAction[];
   settings: DemoSettings;
 }
@@ -88,6 +102,8 @@ export interface DemoDeps {
   uuid: () => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** [0, 1) — the wheel draw; injectable so tests can pin the result. */
+  random?: () => number;
 }
 
 const DEFAULT_SETTINGS: DemoSettings = { timeScale: 60, offline: false, latencyMs: 250 };
@@ -101,6 +117,8 @@ const freshState = (): DemoState => ({
   messages: [],
   questions: [],
   plans: [],
+  wheelOptions: [],
+  wheelSpins: [],
   scheduled: [],
   settings: { ...DEFAULT_SETTINGS },
 });
@@ -113,6 +131,7 @@ const checkViolation = (what: string) => new Error(`new row violates check const
 export function createDemoBackend(deps: DemoDeps) {
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const random = deps.random ?? Math.random;
   const iso = (t = now()) => new Date(t).toISOString();
 
   let state = freshState();
@@ -295,12 +314,22 @@ export function createDemoBackend(deps: DemoDeps) {
       created_at: iso(t - 2_400_000),
     });
 
+    ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun'].forEach((label, i) => {
+      state.wheelOptions.push({
+        id: deps.uuid(),
+        couple_id: couple.id,
+        created_by: i % 2 ? uid : partner,
+        label,
+        created_at: iso(t - 3_600_000 + i),
+      });
+    });
+
     const pSide = couple.user_a_id === partner ? 'a' : 'b';
     couple[`user_${pSide}_battery`] = 64;
     couple[`user_${pSide}_status`] = 'NORMAL';
     couple[`user_${pSide}_seen_at`] = iso(t - 180_000);
 
-    touch('plans', 'court_cases', 'pending_questions', 'delayed_messages', 'couples');
+    touch('plans', 'court_cases', 'pending_questions', 'delayed_messages', 'couples', 'wheel_options');
   }
 
   function baseCase(
@@ -392,6 +421,33 @@ export function createDemoBackend(deps: DemoDeps) {
     FAMILY: 'Annemi aramadım çünkü o beni aradı ve ben açtım. Teknik olarak iletişim kuruldu.',
     OTHER: 'Suçlamaları kabul etmiyorum, ama bir sonraki filmi sen seçebilirsin.',
   };
+
+  // ---------------------------------------------------------------------------
+  // decision wheel (mirrors spin_wheel)
+  // ---------------------------------------------------------------------------
+  function drawSpin(couple: Couple, spunBy: string): WheelSpin {
+    const t = now();
+    if (state.wheelSpins.some((s) => s.couple_id === couple.id && t - new Date(s.created_at).getTime() < WHEEL_COOLDOWN_MS)) {
+      throw new AppError('SPIN_COOLDOWN', 'SPIN_COOLDOWN');
+    }
+    const labels = state.wheelOptions.filter((o) => o.couple_id === couple.id).map((o) => o.label);
+    if (labels.length < 2) throw new AppError('NOT_ENOUGH_OPTIONS', 'NOT_ENOUGH_OPTIONS');
+    const index = Math.min(labels.length - 1, Math.floor(random() * labels.length));
+    const spin: WheelSpin = {
+      id: deps.uuid(),
+      couple_id: couple.id,
+      spun_by: spunBy,
+      option_labels: labels,
+      result_index: index,
+      result_label: labels[index]!,
+      created_at: iso(t),
+    };
+    const others = state.wheelSpins.filter((s) => s.couple_id !== couple.id);
+    const mine = [spin, ...state.wheelSpins.filter((s) => s.couple_id === couple.id)].slice(0, WHEEL_HISTORY);
+    state.wheelSpins = [...mine, ...others];
+    touch('wheel_spins');
+    return spin;
+  }
 
   // ---------------------------------------------------------------------------
   // background tick: scheduled partner actions, message release, 24h sweep
@@ -765,6 +821,53 @@ export function createDemoBackend(deps: DemoDeps) {
       });
     },
 
+    // ---- decision wheel ----
+    async listWheelOptions(coupleId: string): Promise<WheelOption[]> {
+      return op(() => {
+        activeCouple();
+        return state.wheelOptions.filter((o) => o.couple_id === coupleId);
+      });
+    },
+    async listWheelSpins(coupleId: string, limit: number): Promise<WheelSpin[]> {
+      return op(() => {
+        activeCouple();
+        return state.wheelSpins.filter((s) => s.couple_id === coupleId).slice(0, limit);
+      });
+    },
+    async addWheelOption(label: string): Promise<WheelOption> {
+      return op(() => {
+        const couple = activeCouple();
+        const text = (label ?? '').trim();
+        if (text.length < 1 || text.length > WHEEL_LABEL_MAX) {
+          throw new AppError('INVALID_OPTION_LABEL', 'INVALID_OPTION_LABEL');
+        }
+        const mine = state.wheelOptions.filter((o) => o.couple_id === couple.id);
+        if (mine.some((o) => o.label.toLowerCase() === text.toLowerCase())) {
+          throw new AppError('DUPLICATE_OPTION', 'DUPLICATE_OPTION');
+        }
+        if (mine.length >= WHEEL_MAX_OPTIONS) throw new AppError('WHEEL_FULL', 'WHEEL_FULL');
+        const o: WheelOption = { id: deps.uuid(), couple_id: couple.id, created_by: me(), label: text, created_at: iso() };
+        state.wheelOptions.push(o);
+        touch('wheel_options');
+        return o;
+      });
+    },
+    async removeWheelOption(optionId: string): Promise<void> {
+      return op(() => {
+        const c = state.couple;
+        const uid = state.session?.userId;
+        const idx = state.wheelOptions.findIndex(
+          (o) => o.id === optionId && c?.is_active && o.couple_id === c.id && (c.user_a_id === uid || c.user_b_id === uid),
+        );
+        if (idx < 0) throw new AppError('OPTION_NOT_FOUND', 'OPTION_NOT_FOUND');
+        state.wheelOptions.splice(idx, 1);
+        touch('wheel_options');
+      });
+    },
+    async spinWheel(): Promise<WheelSpin> {
+      return op(() => drawSpin(activeCouple(), me()));
+    },
+
     // ---- cooling-off room ----
     async listMessages(coupleId: string): Promise<DelayedMessage[]> {
       return op(() => {
@@ -988,6 +1091,12 @@ export function createDemoBackend(deps: DemoDeps) {
         touch('plans');
         return true;
       }),
+    /** Partner spins: the open wheel screen must animate to the same result. */
+    partnerSpinsWheel: () =>
+      local(() => {
+        const couple = activeCouple();
+        return drawSpin(couple, partnerOf(couple, me())).result_label;
+      }),
     setPartnerPresence: (battery: number | null, status: PartnerStatus) =>
       local(() => {
         const uid = me();
@@ -1002,7 +1111,18 @@ export function createDemoBackend(deps: DemoDeps) {
       await ready;
       state = freshState();
       await deps.storage.removeItem(STORAGE_KEY);
-      for (const ch of ['auth', 'settings', 'couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans', 'profiles'] as Channel[]) {
+      for (const ch of [
+        'auth',
+        'settings',
+        'couples',
+        'court_cases',
+        'delayed_messages',
+        'pending_questions',
+        'plans',
+        'profiles',
+        'wheel_options',
+        'wheel_spins',
+      ] as Channel[]) {
         listeners.get(ch)?.forEach((fn) => fn());
       }
     },

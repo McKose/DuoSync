@@ -118,6 +118,20 @@ export function DashboardScreen() {
         ) : null}
       </Card>
 
+      <Pressable
+        onPress={() => nav.navigate('DecisionWheel')}
+        accessibilityRole="button"
+        accessibilityHint="Karar çarkını açar"
+        className="flex-row items-center rounded-xl2 bg-amber-soft p-4 active:opacity-80"
+      >
+        <Text className="mr-3 text-3xl">🎡</Text>
+        <View className="flex-1">
+          <Text className="text-base font-semibold text-ink">Ne yesek?</Text>
+          <Text className="text-xs text-ink-soft">Karar çarkı: sonucu sunucu seçer, tartışma biter.</Text>
+        </View>
+        <Text className="text-lg text-ink-mute">›</Text>
+      </Pressable>
+
       <View className="mt-5 flex-row items-center justify-between">
         <Text className="text-xs font-bold uppercase tracking-wider text-ink-mute">Planlar</Text>
         <Pressable onPress={toggleForm} accessibilityRole="button" hitSlop={8}>

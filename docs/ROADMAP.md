@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-10-31 (first Claude Code session: baseline re-verified, target decided, A1 check script).
+Last updated: 2026-10-31 (first Claude Code session: baseline re-verified, target decided, A1 check script, C1 decision wheel).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -15,6 +15,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-10-13 | `android-apk.yml`: prebuild + Gradle assembleRelease (arm64-v8a, armeabi-v7a), debug-signed, demo baked in. Triggers: manual, push to `apk-build`, `v*` tag | 23 MB APK built (~15 min) |
 | 2026-10-30 | Audit + roadmap: typecheck 0, test:db 43/43, test:demo 20/20 re-run. **No live backend exists**; never run on a physical device | This roadmap |
 | 2026-10-31 | Claude Code session start: full DoD re-run in a clean container (lint 0, typecheck 0, test:functions 7/7, test:demo 20/20). Decision §3 = **personal use**. Added `supabase/verify/live_check.sql` (13 read-only checks for A1 + A2 pre-checks, secrets never selected) + 2 PGlite tests (healthy project passes; 6 injected misconfigs flagged on the right row) | test:db 45/45; A1 waiting on user |
+| 2026-10-31 | **C1 decision wheel** built while A1 waits on the user: migration `20261031000000_decision_wheel.sql` (`wheel_options`, `wheel_spins`, RPCs `add_wheel_option` / `remove_wheel_option` / `spin_wheel`, SELECT-only RLS, Realtime), demo mirror + panel action "Deniz çarkı çevirsin", `DecisionWheelScreen` built with core `Animated` + plain Views (no SVG/Reanimated → no new device risk ahead of A4). Mutation-tested: dropping the cooldown or granting direct INSERT each fails a test. Fixed during E2E review: labels were oriented for the unrotated wheel and read upside down at rest | test:db 54/54, test:demo 24/24, E2E 12/12 |
 
 ## 2. Current state
 
@@ -24,7 +25,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | Soğuma Odası (15–60 min delay, silent cancel) | ✅ code + tests, ❌ live Realtime leak test pending |
 | Soru Kasası | ✅ |
 | Canlı Masa: plans + checklist (offline, per-item LWW) | ✅ |
-| Canlı Masa: **karar çarkı / tie-breaker** | ❌ not started |
+| Canlı Masa: karar çarkı / tie-breaker | ✅ code + tests (server, demo, E2E), ❌ not yet on 2 physical phones (A5) |
 | Pasif pil / durum senkronu | ✅ |
 | **Acil durum alarmı (sessiz modu aşan)** | ❌ not started |
 | İstinaf (`APPEALED`) | ❌ enum only, no rules defined |
@@ -56,7 +57,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   Create a new project (NOT the gym project the MCP is linked to). `supabase link`, `db push`,
   create Vault secrets `duosync_project_url`, `duosync_internal_secret`; set function secrets
   `GEMINI_API_KEY`, `INTERNAL_WEBHOOK_SECRET`, optional `GEMINI_MODEL`; deploy both functions.
-  *Accept:* `list_migrations` shows both migrations; `cron.job` has 3 DuoSync jobs; both functions ACTIVE.
+  *Accept:* `list_migrations` shows all 3 migrations; `cron.job` has 3 DuoSync jobs; both functions ACTIVE.
   Requires user: project creation, API keys.
   *Verify:* ≥ 10 min after deploy run `supabase/verify/live_check.sql` in the SQL editor → all 13 rows
   `ok = true` (row 8 proves URL + secret + deploy end-to-end via the sweep's 202); `npx supabase functions list` → both ACTIVE.
@@ -88,6 +89,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   | Checklist concurrent edits on 2 phones, one offline | both items survive, no loss |
   | Battery | update only on foreground; none while backgrounded |
   | Third user | sees nothing, cannot write |
+  | Decision wheel: A spins while B has the screen open | B animates to the same segment and label; B's spin within 10 s → `SPIN_COOLDOWN` |
   *Accept:* all rows pass; results table pasted here.
 
 ### Phase B — Lifecycle & security (store-blocking)
@@ -105,11 +107,17 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 
 ### Phase C — Missing modules
 
-- [ ] **C1. Decision wheel "Ne yesek?"** (1.5 d)
+- [x] **C1. Decision wheel "Ne yesek?"** (1.5 d) — done 2026-10-31; two-phone check moved into the A5 matrix
   Result must be produced **server-side** (RPC selecting with `gen_random_uuid()`/`random()` inside
   SECURITY DEFINER) and stored, so neither partner can manipulate it; both screens animate to the
   same stored result via Realtime. Options list editable by both.
   *Accept:* same result on both phones; client cannot write the result column; RLS + demo tests.
+  *Delivered:* draw = `order by gen_random_uuid() limit 1` inside `spin_wheel()`; the row stores the option
+  snapshot + index + label (`CHECK` ties label to snapshot), so the landing angle is a pure function of the row
+  (`src/lib/wheel.ts`, offset seeded by spin id). Clients have SELECT only (direct INSERT/UPDATE/DELETE →
+  `permission denied`, tested). Limits: 12 options, 30 chars, case-insensitive duplicates, 10 s couple-wide
+  cooldown (> 4 s animation), last 20 spins kept. Known: Realtime DELETE events on `wheel_options` are not
+  RLS-filtered by Supabase (PK only, no label) — same as `plans`; the client just refetches.
 - [ ] **C2. Emergency alarm that bypasses silent mode** (2–3 d)
   Android: high-importance channel with bypass-DND + `USE_FULL_SCREEN_INTENT` (Play declaration on
   Android 14+). iOS: *Critical Alerts* needs Apple entitlement (unlikely to be granted) → fall back to

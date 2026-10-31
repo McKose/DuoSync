@@ -85,6 +85,24 @@ type PlanRow = {
   updated_at: string;
 };
 
+type WheelOptionRow = {
+  id: string;
+  couple_id: string;
+  created_by: string | null;
+  label: string;
+  created_at: string;
+};
+
+type WheelSpinRow = {
+  id: string;
+  couple_id: string;
+  spun_by: string | null;
+  option_labels: Json;
+  result_index: number;
+  result_label: string;
+  created_at: string;
+};
+
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   __InternalSupabase: {
@@ -297,6 +315,48 @@ export type Database = {
           },
         ];
       };
+      wheel_options: {
+        Row: WheelOptionRow;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          created_by?: string | null;
+          label: string;
+          created_at?: string;
+        };
+        Update: Partial<WheelOptionRow>;
+        Relationships: [
+          {
+            foreignKeyName: 'wheel_options_couple_id_fkey';
+            columns: ['couple_id'];
+            isOneToOne: false;
+            referencedRelation: 'couples';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      wheel_spins: {
+        Row: WheelSpinRow;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          spun_by?: string | null;
+          option_labels: Json;
+          result_index: number;
+          result_label: string;
+          created_at?: string;
+        };
+        Update: Partial<WheelSpinRow>;
+        Relationships: [
+          {
+            foreignKeyName: 'wheel_spins_couple_id_fkey';
+            columns: ['couple_id'];
+            isOneToOne: false;
+            referencedRelation: 'couples';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -378,6 +438,17 @@ export type Database = {
         Returns: PlanRow;
         SetofOptions: { from: '*'; to: 'plans'; isOneToOne: true; isSetofReturn: false };
       };
+      add_wheel_option: {
+        Args: { p_label: string };
+        Returns: WheelOptionRow;
+        SetofOptions: { from: '*'; to: 'wheel_options'; isOneToOne: true; isSetofReturn: false };
+      };
+      remove_wheel_option: { Args: { p_option_id: string }; Returns: undefined };
+      spin_wheel: {
+        Args: never;
+        Returns: WheelSpinRow;
+        SetofOptions: { from: '*'; to: 'wheel_spins'; isOneToOne: true; isSetofReturn: false };
+      };
       generate_pairing_code: { Args: never; Returns: string };
     };
     Enums: {
@@ -407,6 +478,8 @@ export type CourtCase = Tables<'court_cases'>;
 export type DelayedMessage = Tables<'delayed_messages'>;
 export type PendingQuestion = Tables<'pending_questions'>;
 export type Plan = Tables<'plans'>;
+export type WheelOption = Tables<'wheel_options'>;
+export type WheelSpin = Tables<'wheel_spins'>;
 export type CaseStatus = Enums<'case_status'>;
 export type MessageStatus = Enums<'message_status'>;
 export type PartnerStatus = Enums<'partner_status'>;

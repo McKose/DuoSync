@@ -23,6 +23,12 @@ const CODE_MESSAGES: Record<string, string> = {
   INVALID_ITEM_TEXT: 'Liste öğesi 1–200 karakter olmalı.',
   INVALID_ITEM_TIMESTAMP: 'Geçersiz zaman bilgisi.',
   CHECKLIST_FULL: 'Bir plana en fazla 100 madde eklenebilir.',
+  INVALID_OPTION_LABEL: 'Seçenek 1–30 karakter olmalı.',
+  DUPLICATE_OPTION: 'Bu seçenek çarkta zaten var.',
+  WHEEL_FULL: 'Çarkta en fazla 12 seçenek olabilir.',
+  OPTION_NOT_FOUND: 'Seçenek bulunamadı; partnerin silmiş olabilir.',
+  NOT_ENOUGH_OPTIONS: 'Çevirmek için en az 2 seçenek ekleyin.',
+  SPIN_COOLDOWN: 'Çark daha yeni döndü. Birkaç saniye bekleyin.',
 };
 
 const AUTH_MESSAGES: [RegExp, string][] = [

@@ -164,6 +164,29 @@ await step('plan detail: toggle checklist + add item', async () => {
   await back();
 });
 
+await step('decision wheel: my spin, then partner spin, both land on stored results', async () => {
+  await click('Ne yesek?');
+  await waitText('Seçenekler');
+  await waitText('Lahmacun');
+  await type('Yeni seçenek', 'Pide');
+  await click('Ekle');
+  await waitText('6/12');
+  await click('Çevir 🎡');
+  await waitText('Sen çevirdin…');
+  await shot('wheel-spinning');
+  await waitText('🎉 Karar:', 10000);
+  await shot('wheel-result');
+  await sleep(10500); // server-side cooldown between spins
+  await click('Kontrol paneli');
+  await click('Deniz çarkı çevirsin');
+  await back();
+  await waitText('Deniz çevirdi', 10000);
+  await waitText('🎉 Karar:', 10000);
+  await waitText('Önceki kararlar');
+  await shot('wheel-partner-result');
+  await back();
+});
+
 await step('court: defend seeded case → verdict', async () => {
   await click('Mahkeme');
   await waitText('Telefonun sürekli sessizde kalması');

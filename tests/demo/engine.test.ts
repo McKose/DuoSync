@@ -7,8 +7,9 @@ import { describe, test } from 'node:test';
 import { createDemoBackend, DEMO_ME_ID, DEMO_PARTNER_ID, PARTNER_DELAYS } from '../../src/demo/engine';
 import { demoVerdict } from '../../src/demo/judge';
 import { errorCode, isNetworkError } from '../../src/lib/errors';
+import { restingAngle, segmentAt, spinTarget, WHEEL_COOLDOWN_MS } from '../../src/lib/wheel';
 
-function setup() {
+function setup(random?: () => number) {
   const mem = new Map<string, string>();
   let clock = Date.parse('2026-10-09T10:00:00Z');
   const be = createDemoBackend({
@@ -20,6 +21,7 @@ function setup() {
     uuid: randomUUID,
     now: () => clock,
     sleep: async () => undefined,
+    random,
   });
   const advance = async (ms: number) => {
     clock += ms;
@@ -28,8 +30,8 @@ function setup() {
   return { be, mem, advance, now: () => clock };
 }
 
-async function paired() {
-  const s = setup();
+async function paired(random?: () => number) {
+  const s = setup(random);
   await s.be.signUp('ayse@example.com', 'secret123', 'Ayşe');
   await s.be.pairWithCode('K7M2QX');
   const couple = (await s.be.fetchMyCouple(DEMO_ME_ID))!;
@@ -228,6 +230,66 @@ describe('checklist LWW', () => {
 
     assert.equal(await codeOf(be.upsertChecklistItem(plan.id, { id: 'nope', text: 'x', done: false, deleted: false, updated_at: at(0) })), 'INVALID_ITEM_ID');
     assert.equal(await be.panel.partnerTogglesFirstItem(), true);
+  });
+});
+
+describe('decision wheel', () => {
+  test('seeded options; validation, duplicate guard and 12-option cap mirror the server', async () => {
+    const { be, couple } = await paired();
+    const seeded = (await be.listWheelOptions(couple.id)).map((o) => o.label);
+    assert.deepEqual(seeded, ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun']);
+    assert.equal(await codeOf(be.addWheelOption('   ')), 'INVALID_OPTION_LABEL');
+    assert.equal(await codeOf(be.addWheelOption('x'.repeat(31))), 'INVALID_OPTION_LABEL');
+    assert.equal(await codeOf(be.addWheelOption(' sushi ')), 'DUPLICATE_OPTION');
+    for (let i = 0; i < 7; i++) await be.addWheelOption(`Seçenek ${i}`);
+    assert.equal(await codeOf(be.addWheelOption('On üçüncü')), 'WHEEL_FULL');
+    assert.equal(await codeOf(be.removeWheelOption(randomUUID())), 'OPTION_NOT_FOUND');
+  });
+
+  test('spin stores snapshot + result; couple-wide cooldown; partner spin; history capped', async () => {
+    let r = 0.5;
+    const { be, couple, advance } = await paired(() => r);
+    const spin = await be.spinWheel();
+    assert.deepEqual(spin.option_labels, ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun']);
+    assert.equal(spin.result_index, 2);
+    assert.equal(spin.result_label, 'Pizza');
+    assert.equal(spin.spun_by, DEMO_ME_ID);
+    assert.equal(await codeOf(be.spinWheel()), 'SPIN_COOLDOWN');
+    assert.equal(await codeOf(be.panel.partnerSpinsWheel()), 'SPIN_COOLDOWN');
+    await advance(WHEEL_COOLDOWN_MS);
+    r = 0.999;
+    assert.equal(await be.panel.partnerSpinsWheel(), 'Lahmacun');
+    const [latest] = await be.listWheelSpins(couple.id, 10);
+    assert.equal(latest!.spun_by, DEMO_PARTNER_ID);
+    for (let i = 0; i < 25; i++) {
+      await advance(WHEEL_COOLDOWN_MS);
+      await be.spinWheel();
+    }
+    assert.equal((await be.listWheelSpins(couple.id, 100)).length, 20);
+  });
+
+  test('fewer than two options cannot spin; removing is shared', async () => {
+    const { be, couple } = await paired();
+    const opts = await be.listWheelOptions(couple.id);
+    for (const o of opts.slice(1)) await be.removeWheelOption(o.id);
+    assert.equal(await codeOf(be.spinWheel()), 'NOT_ENOUGH_OPTIONS');
+    assert.equal(await codeOf(be.panel.partnerSpinsWheel()), 'NOT_ENOUGH_OPTIONS');
+  });
+
+  test('geometry: every result lands under the pointer, same spot for the same spin id', () => {
+    for (let n = 2; n <= 12; n++) {
+      for (let k = 0; k < n; k++) {
+        const id = randomUUID();
+        const rest = restingAngle(k, n, id);
+        assert.equal(rest, restingAngle(k, n, id));
+        assert.equal(segmentAt(rest, n), k);
+        for (const from of [0, 17.5, 3600 + 123]) {
+          const target = spinTarget(from, rest);
+          assert.ok(target - from >= 5 * 360 && target - from < 6 * 360);
+          assert.equal(segmentAt(target, n), k);
+        }
+      }
+    }
   });
 });
 

@@ -16,10 +16,11 @@
 with
 expected_tables(name) as (
     values ('profiles'), ('push_tokens'), ('couples'), ('pairing_attempts'),
-           ('court_cases'), ('delayed_messages'), ('pending_questions'), ('plans')
+           ('court_cases'), ('delayed_messages'), ('pending_questions'), ('plans'),
+           ('wheel_options'), ('wheel_spins')
 ),
 mig as (
-    select count(*) filter (where version in ('20261008000000', '20261008000100')) as n,
+    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000')) as n,
            coalesce(string_agg(version, ', ' order by version), 'none') as versions
     from supabase_migrations.schema_migrations
 ),
@@ -74,7 +75,8 @@ pub as (
     select count(*) as n
     from pg_publication_tables
     where pubname = 'supabase_realtime' and schemaname = 'public'
-      and tablename in ('couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans')
+      and tablename in ('couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans',
+                        'wheel_options', 'wheel_spins')
 ),
 anon_exec as (
     select string_agg(n.nspname || '.' || p.proname, ', ' order by n.nspname, p.proname) as list
@@ -97,7 +99,7 @@ definer_path as (
                       where cfg in ('search_path=""', 'search_path='))
 )
 select n, item, ok, detail from (
-    select 1 as n, 'migrations applied' as item, mig.n = 2 as ok, mig.versions as detail from mig
+    select 1 as n, 'migrations applied (3)' as item, mig.n = 3 as ok, mig.versions as detail from mig
     union all
     select 2, 'extensions pg_cron + pg_net', ext.n = 2, ext.list from ext
     union all
@@ -129,12 +131,12 @@ select n, item, ok, detail from (
                    else '' end
     from http
     union all
-    select 9, 'RLS on all 8 tables', rls.n_on = 8 and rls_off.list is null,
+    select 9, 'RLS on all 10 tables', rls.n_on = 10 and rls_off.list is null,
            coalesce(nullif(concat_ws(' | ', 'absent: ' || rls.absent, 'RLS off: ' || rls_off.list), ''),
-                    rls.n_on || '/8 with RLS')
+                    rls.n_on || '/10 with RLS')
     from rls, rls_off
     union all
-    select 10, 'realtime publication (5 tables)', pub.n = 5, pub.n || '/5 published' from pub
+    select 10, 'realtime publication (7 tables)', pub.n = 7, pub.n || '/7 published' from pub
     union all
     select 11, 'anon executes no public/private fn', anon_exec.list is null,
            coalesce(anon_exec.list, 'none') from anon_exec

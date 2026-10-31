@@ -95,6 +95,7 @@ await db.exec(mig('20261008000000_init_schema.sql'));
 await db.exec(
   mig('20261008000100_jobs_and_webhooks.sql').replace(/^create extension.*$/gim, '-- (stubbed) $&'),
 );
+await db.exec(mig('20261031000000_decision_wheel.sql'));
 await su(
   `insert into auth.users (id, email, raw_user_meta_data) values
    ($1, 'ayse@example.com', '{"display_name":"Ayşe"}'), ($2, 'berk@example.com', '{}'), ($3, 'eve@example.com', '{}')`,
@@ -450,6 +451,102 @@ await test('paired users cannot join a third couple', async () => {
   assert.ok(c.rows.length === 1);
 });
 
+console.log('Decision wheel');
+const optionLabels = async (who) =>
+  (await as(who, `select label from public.wheel_options order by created_at, id`)).rows.map((r) => r.label);
+/** Move every spin back a minute so the 10 s cooldown does not block the next one. */
+const pastCooldown = () => su(`update public.wheel_spins set created_at = created_at - interval '1 minute'`);
+
+await test('both partners add options; label validation and case-insensitive duplicate guard', async () => {
+  await as(A, `select * from public.add_wheel_option('  Sushi ')`);
+  await as(B, `select * from public.add_wheel_option('Köfte')`);
+  await rejects(as(A, `select * from public.add_wheel_option('   ')`), /INVALID_OPTION_LABEL/);
+  await rejects(as(A, `select * from public.add_wheel_option($1)`, ['x'.repeat(31)]), /INVALID_OPTION_LABEL/);
+  await rejects(as(B, `select * from public.add_wheel_option('sushi')`), /DUPLICATE_OPTION/);
+  assert.deepEqual(await optionLabels(A), ['Sushi', 'Köfte']);
+  assert.deepEqual(await optionLabels(B), ['Sushi', 'Köfte']);
+});
+
+await test('stranger and other couple: no visibility, cannot add or remove', async () => {
+  assert.deepEqual(await optionLabels(C), []);
+  assert.deepEqual(await optionLabels(D), []);
+  await rejects(as(C, `select * from public.add_wheel_option('Pizza')`), /NOT_PAIRED/);
+  const opt = await su(`select id from public.wheel_options where label = 'Sushi'`);
+  await rejects(as(C, `select public.remove_wheel_option($1)`, [opt.rows[0].id]), /OPTION_NOT_FOUND/);
+  await rejects(as(D, `select public.remove_wheel_option($1)`, [opt.rows[0].id]), /OPTION_NOT_FOUND/);
+  await rejects(as('anon', `select public.spin_wheel()`), /permission denied/);
+});
+
+await test('direct writes to wheel tables are denied', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  await rejects(as(A, `insert into public.wheel_options (couple_id, label) values ($1, 'Pizza')`, [cid]), /permission denied/);
+  await rejects(
+    as(A, `insert into public.wheel_spins (couple_id, option_labels, result_index, result_label) values ($1, '["a","b"]', 0, 'a')`, [cid]),
+    /permission denied/,
+  );
+  await rejects(as(A, `update public.wheel_options set label = 'Pizza'`), /permission denied/);
+});
+
+await test('cap of 12 options per couple', async () => {
+  for (let i = 1; i <= 10; i++) await as(i % 2 ? A : B, `select * from public.add_wheel_option($1)`, [`Seçenek ${i}`]);
+  await rejects(as(A, `select * from public.add_wheel_option('On üçüncü')`), /WHEEL_FULL/);
+  assert.equal((await optionLabels(A)).length, 12);
+});
+
+await test('spin needs at least two options', async () => {
+  await rejects(as(D, `select * from public.spin_wheel()`), /NOT_ENOUGH_OPTIONS/);
+  await as(D, `select * from public.add_wheel_option('Mantı')`);
+  await rejects(as(D, `select * from public.spin_wheel()`), /NOT_ENOUGH_OPTIONS/);
+});
+
+let spinId;
+await test('spin is drawn and stored server-side; both members see the same row, nobody else does', async () => {
+  const r = (await as(A, `select * from public.spin_wheel()`)).rows[0];
+  spinId = r.id;
+  assert.equal(r.spun_by, A);
+  assert.deepEqual(r.option_labels, await optionLabels(A));
+  assert.equal(r.option_labels[r.result_index], r.result_label);
+  const seen = await as(B, `select id, result_label from public.wheel_spins`);
+  assert.deepEqual(seen.rows, [{ id: r.id, result_label: r.result_label }]);
+  assert.equal((await as(C, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 0);
+  assert.equal((await as(D, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 0);
+});
+
+await test('10 s cooldown applies to the couple, not the user', async () => {
+  await rejects(as(B, `select * from public.spin_wheel()`), /SPIN_COOLDOWN/);
+  // The other couple is unaffected.
+  await as(E, `select * from public.add_wheel_option('Lahmacun')`);
+  const d = (await as(D, `select * from public.spin_wheel()`)).rows[0];
+  assert.ok(['Mantı', 'Lahmacun'].includes(d.result_label));
+  assert.equal((await as(A, `select count(*)::int n from public.wheel_spins where id = $1`, [d.id])).rows[0].n, 0);
+});
+
+await test('stored result cannot be rewritten; a mismatched result is rejected even for the service role', async () => {
+  await rejects(as(B, `update public.wheel_spins set result_label = 'Köfte' where id = $1`, [spinId]), /permission denied/);
+  await rejects(as(A, `delete from public.wheel_spins where id = $1`, [spinId]), /permission denied/);
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  await rejects(
+    su(`insert into public.wheel_spins (couple_id, option_labels, result_index, result_label) values ($1, '["a","b"]', 0, 'b')`, [cid]),
+    /wheel_spins_result_matches/,
+  );
+});
+
+await test('partner can remove an option; draw covers every option; history capped at 20', async () => {
+  const extra = await su(`select id from public.wheel_options where label like 'Seçenek %' or label = 'Köfte'`);
+  for (const [i, row] of extra.rows.entries()) await as(i % 2 ? A : B, `select public.remove_wheel_option($1)`, [row.id]);
+  await as(B, `select * from public.add_wheel_option('Pide')`);
+  await as(A, `select * from public.add_wheel_option('Döner')`);
+  assert.deepEqual(await optionLabels(A), ['Sushi', 'Pide', 'Döner']);
+  const wins = new Set();
+  for (let i = 0; i < 60; i++) {
+    await pastCooldown();
+    wins.add((await as(i % 2 ? A : B, `select result_label from public.spin_wheel()`)).rows[0].result_label);
+  }
+  // P(an option never wins in 60 uniform draws of 3) ≈ 3·(2/3)^60 ≈ 3e-10.
+  assert.deepEqual([...wins].sort(), ['Döner', 'Pide', 'Sushi']);
+  assert.equal((await as(A, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 20);
+});
+
 console.log('Schedules');
 await test('cron jobs registered', async () => {
   const r = await su(`select name from cron.jobs order by name`);
@@ -463,7 +560,7 @@ const liveCheck = readFileSync(join(here, '..', 'verify', 'live_check.sql'), 'ut
 await db.exec(`
 create schema supabase_migrations;
 create table supabase_migrations.schema_migrations (version text primary key);
-insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100');
+insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000');
 create view cron.job as
   select row_number() over (order by name)::bigint as jobid, name as jobname, schedule, command, true as active
   from cron.jobs;
