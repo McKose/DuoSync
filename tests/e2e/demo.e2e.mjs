@@ -213,6 +213,21 @@ await step('court: file a case → partner defends → judged', async () => {
   await back();
 });
 
+await step('appeal: I appeal the fresh verdict → partner replies → 1st appeal verdict counts', async () => {
+  await click('Kumanda yine kayıp');
+  await waitText('İlk derece kararı');
+  await click('İtiraz et');
+  await type('İtiraz gerekçen', 'Kumandayı en son o kullandı, delil yetersiz.');
+  await click('İtirazı gönder');
+  await waitText('1. istinaf');
+  await shot('appeal-filed');
+  await waitText('1. istinaf kararı', 25000); // Deniz replies (~8 s), panel decides (~2.5 s)
+  await waitText('Geçerli karar');
+  await waitText('Önceki karar');
+  await shot('appeal-judged');
+  await back();
+});
+
 await step('cooling-off: schedule then silently cancel', async () => {
   await click('Soğuma');
   await type("Deniz'e mesaj", 'Şu an çok sinirliyim!');

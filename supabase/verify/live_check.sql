@@ -17,10 +17,10 @@ with
 expected_tables(name) as (
     values ('profiles'), ('push_tokens'), ('couples'), ('pairing_attempts'),
            ('court_cases'), ('delayed_messages'), ('pending_questions'), ('plans'),
-           ('wheel_options'), ('wheel_spins')
+           ('wheel_options'), ('wheel_spins'), ('court_appeals')
 ),
 mig as (
-    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000', '20261031000100')) as n,
+    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000', '20261031000100', '20261102000000')) as n,
            coalesce(string_agg(version, ', ' order by version), 'none') as versions
     from supabase_migrations.schema_migrations
 ),
@@ -76,7 +76,7 @@ pub as (
     from pg_publication_tables
     where pubname = 'supabase_realtime' and schemaname = 'public'
       and tablename in ('couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans',
-                        'wheel_options', 'wheel_spins')
+                        'wheel_options', 'wheel_spins', 'court_appeals')
 ),
 anon_exec as (
     select string_agg(n.nspname || '.' || p.proname, ', ' order by n.nspname, p.proname) as list
@@ -88,7 +88,9 @@ svc_exec as (
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.proname in ('claim_case_for_verdict', 'complete_verdict', 'fail_verdict',
-                        'list_claimable_cases', 'release_due_messages')
+                        'list_claimable_cases', 'release_due_messages',
+                        'claim_appeal_for_verdict', 'complete_appeal_verdict',
+                        'fail_appeal_verdict', 'list_claimable_appeals')
       and has_function_privilege('authenticated', p.oid, 'execute')
 ),
 -- The migrations narrow Supabase's default Data API grants instead of granting
@@ -102,6 +104,7 @@ grants as (
         ('authenticated', 'select', 'delayed_messages'), ('authenticated', 'select', 'pending_questions'),
         ('authenticated', 'select', 'plans'), ('authenticated', 'insert', 'plans'),
         ('authenticated', 'select', 'wheel_options'), ('authenticated', 'select', 'wheel_spins'),
+        ('authenticated', 'select', 'court_appeals'), ('service_role', 'select', 'court_appeals'),
         ('service_role', 'select', 'court_cases'), ('service_role', 'select', 'push_tokens'),
         ('service_role', 'delete', 'push_tokens')
     ) as x(who, priv, tbl)
@@ -116,7 +119,7 @@ definer_path as (
                       where cfg in ('search_path=""', 'search_path='))
 )
 select n, item, ok, detail from (
-    select 1 as n, 'migrations applied (4)' as item, mig.n = 4 as ok, mig.versions as detail from mig
+    select 1 as n, 'migrations applied (5)' as item, mig.n = 5 as ok, mig.versions as detail from mig
     union all
     select 2, 'extensions pg_cron + pg_net', ext.n = 2, ext.list from ext
     union all
@@ -148,12 +151,12 @@ select n, item, ok, detail from (
                    else '' end
     from http
     union all
-    select 9, 'RLS on all 10 tables', rls.n_on = 10 and rls_off.list is null,
+    select 9, 'RLS on all 11 tables', rls.n_on = 11 and rls_off.list is null,
            coalesce(nullif(concat_ws(' | ', 'absent: ' || rls.absent, 'RLS off: ' || rls_off.list), ''),
-                    rls.n_on || '/10 with RLS')
+                    rls.n_on || '/11 with RLS')
     from rls, rls_off
     union all
-    select 10, 'realtime publication (7 tables)', pub.n = 7, pub.n || '/7 published' from pub
+    select 10, 'realtime publication (8 tables)', pub.n = 8, pub.n || '/8 published' from pub
     union all
     select 11, 'anon executes no public/private fn', anon_exec.list is null,
            coalesce(anon_exec.list, 'none') from anon_exec

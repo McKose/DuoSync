@@ -4,6 +4,7 @@ export const qk = {
   couple: (userId: string) => ['couple', userId] as const,
   profiles: (coupleId: string) => ['profiles', coupleId] as const,
   cases: (coupleId: string) => ['cases', coupleId] as const,
+  appeals: (coupleId: string) => ['appeals', coupleId] as const,
   case: (caseId: string) => ['case', caseId] as const,
   plans: (coupleId: string) => ['plans', coupleId] as const,
   plan: (planId: string) => ['plan', planId] as const,

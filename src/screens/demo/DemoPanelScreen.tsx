@@ -54,6 +54,7 @@ export function DemoPanelScreen() {
   const partnerActions: Action[] = [
     { label: `${DEMO_PARTNER_NAME} dava açsın`, hint: 'Mahkeme sekmesinde rozet çıkar', run: demo.panel.partnerFilesCase },
     { label: 'Savunma sürelerimi doldur', hint: 'Sweep 1 sn içinde savunmasız karar verir', run: demo.panel.expireMyDefenses },
+    { label: `${DEMO_PARTNER_NAME} karara itiraz etsin`, hint: 'Son karara; cevabın için 12 sa (hızlı modda 12 dk)', run: demo.panel.partnerAppeals },
     { label: `${DEMO_PARTNER_NAME} soğuma mesajı yazsın`, hint: '15 dk sonra (hızlı modda 15 sn) gelir', run: demo.panel.partnerSendsMessage },
     {
       label: `${DEMO_PARTNER_NAME} bekleyen mesajını geri çeksin`,

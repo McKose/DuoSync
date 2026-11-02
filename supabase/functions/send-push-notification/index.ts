@@ -21,6 +21,7 @@ const ALLOWED_TYPES = new Set([
   'QUESTION_ASKED',
   'QUESTION_ANSWERED',
   'COUPLE_ENDED',
+  'APPEAL_FILED',
 ]);
 
 interface PushRequest {

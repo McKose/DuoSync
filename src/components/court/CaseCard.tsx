@@ -1,7 +1,8 @@
 import { Pressable, Text, View } from 'react-native';
 import { CATEGORY_META, casePhase, type CasePhase } from '@/api/court';
+import { appealView } from '@/lib/appeals';
 import { formatCountdown, formatRelative } from '@/lib/time';
-import { CASE_CATEGORIES, type CaseCategory, type CourtCase } from '@/types/database.types';
+import { CASE_CATEGORIES, type CaseCategory, type CourtAppeal, type CourtCase } from '@/types/database.types';
 
 const PHASE: Record<CasePhase, { label: string; cls: string }> = {
   AWAITING_DEFENSE: { label: 'Savunma bekleniyor', cls: 'bg-amber-soft text-amber' },
@@ -30,22 +31,29 @@ export function categoryMeta(category: string) {
 
 interface Props {
   item: CourtCase;
+  /** The couple's appeal rounds (any case); used for the current verdict and reply prompts. */
+  appeals: CourtAppeal[];
   userId: string;
   now: number;
   onPress: () => void;
 }
 
-export function CaseCard({ item, userId, now, onPress }: Props) {
+export function CaseCard({ item, appeals, userId, now, onPress }: Props) {
   const phase = casePhase(item, now);
   const meta = categoryMeta(item.category);
   const iAmDefendant = item.defendant_id === userId;
   const needsMyDefense = phase === 'AWAITING_DEFENSE' && iAmDefendant;
+  const view = appealView(item, appeals, now);
+  const replyDue = view.open && view.open.status === 'AWAITING_REPLY' && view.open.respondent_reply === null
+    ? new Date(view.open.reply_deadline).getTime() - now
+    : null;
+  const needsMyReply = replyDue !== null && replyDue > 0 && view.open?.respondent_id === userId;
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      className={`mb-3 rounded-xl2 bg-paper-raised p-4 active:opacity-80 ${needsMyDefense ? 'border-2 border-amber' : ''}`}
+      className={`mb-3 rounded-xl2 bg-paper-raised p-4 active:opacity-80 ${needsMyDefense || needsMyReply ? 'border-2 border-amber' : ''}`}
     >
       <View className="flex-row items-start justify-between">
         <Text className="mr-3 flex-1 text-base font-semibold text-ink" numberOfLines={2}>
@@ -61,9 +69,13 @@ export function CaseCard({ item, userId, now, onPress }: Props) {
           Savunman için kalan süre: {formatCountdown(new Date(item.defense_deadline).getTime() - now)}
         </Text>
       ) : null}
-      {phase === 'JUDGED' && item.fault_ratio_prosecutor !== null ? (
+      {needsMyReply && replyDue !== null ? (
+        <Text className="mt-2 text-sm font-semibold text-amber">İtiraza cevabın bekleniyor · kalan {formatCountdown(replyDue)}</Text>
+      ) : null}
+      {phase === 'JUDGED' && view.current ? (
         <Text className="mt-2 text-sm text-ink-soft">
-          Kusur · Davacı %{item.fault_ratio_prosecutor} — Davalı %{item.fault_ratio_defendant}
+          Kusur · Davacı %{view.current.fault_ratio_prosecutor} — Davalı %{view.current.fault_ratio_defendant}
+          {view.currentRound > 0 ? ` · ${view.currentRound}. istinaf` : ''}
         </Text>
       ) : null}
     </Pressable>

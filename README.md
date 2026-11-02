@@ -70,7 +70,7 @@ cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ### 2. Supabase
 ```bash
 npx supabase link --project-ref <ref>
-npx supabase db push                          # dört migration
+npx supabase db push                          # beş migration
 
 # Vault (SQL editöründe, bir kez — git'e girmesin diye migration'da değil):
 #   select vault.create_secret('https://<ref>.supabase.co', 'duosync_project_url');
@@ -110,10 +110,10 @@ npx expo start --dev-client
 |---|---|---|
 | `npm run lint` | ESLint (`eslint-config-expo` + react-hooks kuralları, `exhaustive-deps` hata seviyesinde) | ✅ 0 bulgu |
 | `npm run typecheck` | Tüm istemci kodu, `database.types.ts` ile RPC/tablo tipleri | ✅ 0 hata |
-| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 58/58 |
-| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, karar çarkı, eşleşmeyi bozma, hata kodları) + çark geometrisi | ✅ 26/26 |
-| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → karar çarkı (ben + partner çevirir) → dava/savunma/karar → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı → eşleşmeyi bozma | ✅ 13/13, 0 tarayıcı hatası |
-| `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
+| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 65/65 |
+| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, karar çarkı, istinaf, eşleşmeyi bozma, hata kodları) + çark geometrisi | ✅ 31/31 |
+| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → karar çarkı (ben + partner çevirir) → dava/savunma/karar → istinaf → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı → eşleşmeyi bozma | ✅ 14/14, 0 tarayıcı hatası |
+| `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti (istinaf prompt'u dahil) | ✅ 8/8 |
 | `npx expo export --platform android` | Metro + NativeWind + Reanimated 4 + Hermes bundle | ✅ 4.1 MB `.hbc` |
 
 CI (`.github/workflows/ci.yml`) bu kontrolleri her push ve PR'da çalıştırır.
@@ -153,6 +153,7 @@ Client (Expo)                         Supabase
 | Pasif pil | `AppState` background/inactive→active geçişinde tek okuma + throttle (2 dk / %5). Arka plan görevi, listener, polling yok | — |
 | Offline checklist | İstemci UUID'li öğeler, öğe başına LWW (`updated_at`), sunucuda satır kilitli atomik merge, saat kayması koruması (+1 dk tavan), tombstone silme; TanStack paused mutation + AsyncStorage persist ile yeniden başlatmaya dayanıklı | ✅ |
 | Karar çarkı | Sonucu `spin_wheel()` (SECURITY DEFINER) `gen_random_uuid()` ile seçer ve seçenek listesinin anlık görüntüsüyle birlikte saklar; istemci yalnız okur ve animasyonla o satıra döner. Duruş noktası spin id'sinden türetilir → iki telefonda aynı yer. Çift başına 10 sn bekleme, en çok 12 seçenek, büyük/küçük harf duyarsız tekrar engeli; `CHECK` ile sonuç = anlık görüntüdeki etiket | ✅ |
+| İstinaf | Son karardan sonra 12 saat içinde iki taraf da itiraz edebilir, dava başına en çok 2 tur. Karşı taraf 12 saat içinde cevap verir; `claim_appeal_for_verdict()` cevap yoksa ve süre dolmadıysa **boş set** döner (savunma kilidinin ikizi). İlk derece kararı `court_cases`'te değişmeden kalır, her tur kendi kararını saklar; geçerli olan son karardır | ✅ |
 | Eşleşmeyi bozma | `leave_couple()` çift satırını kilitleyip siler; cascade ile davalar, planlar, mesajlar (gönderilmemişler dahil, push'suz), sorular ve çark silinir. Profil ve push token kalır, iki taraf hemen yeniden eşleşebilir. Partnere içeriksiz bir push gider; iki cihaz da önbellekteki ortak veriyi ve kuyruktaki düzenlemeleri atar | ✅ |
 
 ---
@@ -177,7 +178,6 @@ Client (Expo)                         Supabase
 
 ## Kapsam dışı bırakılanlar
 
-- **İstinaf (`APPEALED`)**: enum'da duruyor, akış tanımlanmadığı için UI/RPC yok.
 - **Sessiz modu aşan acil alarm**: proje açıklamasında var, spec'te yok. iOS'ta Apple'ın *Critical Alerts* entitlement onayı, Android'de `USE_FULL_SCREEN_INTENT`/DND erişimi gerektirir — ayrı bir iş kalemi (ROADMAP C2). Karar çarkı 2026-10-31'de eklendi (C1).
 - **Hesap silme** (B1): kişisel kullanım kararıyla ertelendi. Eşleşmeyi bozma 2026-10-31'de eklendi (B2).
 
@@ -190,4 +190,5 @@ Client (Expo)                         Supabase
 | AsyncStorage'da oturum | Root'lu cihazda token okunabilir | SecureStore 2 KB limitine takılır; gerekirse AES anahtarı SecureStore'da + şifreli AsyncStorage deseni |
 | Pil verisi tazeliği | Partner uygulamayı açmazsa veri bayatlar | UI "son görülme" gösterir, 6 saatten eski veriyi soluk çizer |
 | Tek cihaz / kullanıcı | `push_tokens` PK = `user_id` | Çoklu cihaz gerekirse PK'yı `(user_id, token)` yap |
-| LLM maliyeti | Kötüye kullanım | Davacı başına 24 saatte 5 dava; claim başına en çok 2 çağrı, dava başına toplam 5 deneme |
+| LLM maliyeti | Kötüye kullanım | Davacı başına 24 saatte 5 dava; dava başına en çok 2 istinaf; claim başına en çok 2 çağrı, dava/tur başına toplam 5 deneme |
+| Eşleşme bozulurken Realtime DELETE | Supabase DELETE olaylarını RLS'e göre süzmez: partner, görmediği (gönderilmemiş/iptal) mesajlar için de yalnız birincil anahtar içeren DELETE çerçeveleri alır; içerik sızmaz | Kullanıcı kararıyla kabul edildi (2026-11-02); A5'te WS trafiği ölçülecek, gerekirse Broadcast'a geçilir |

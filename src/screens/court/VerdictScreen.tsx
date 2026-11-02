@@ -9,10 +9,12 @@ import { AppButton } from '@/components/common/AppButton';
 import { Screen } from '@/components/common/Screen';
 import { Card, ErrorBanner, LoadingView, SectionTitle } from '@/components/common/StateViews';
 import { TextField } from '@/components/common/TextField';
+import { AppealRound } from '@/components/court/AppealRound';
 import { categoryMeta, PhaseBadge } from '@/components/court/CaseCard';
-import { FaultBar } from '@/components/court/FaultBar';
-import { useCase, useRetryVerdict, useSubmitDefense } from '@/hooks/useCourt';
+import { VerdictBody } from '@/components/court/VerdictBody';
+import { useAppeals, useCase, useFileAppeal, useRetryVerdict, useSubmitDefense } from '@/hooks/useCourt';
 import { useNow } from '@/hooks/useNow';
+import { APPEAL_REASON_MIN, APPEAL_TEXT_MAX, appealView, MAX_APPEALS, verdictOf } from '@/lib/appeals';
 import { formatCountdown, formatDateTime } from '@/lib/time';
 import type { RootStackParamList } from '@/navigation/types';
 import { usePairedContext } from '@/store/useCoupleStore';
@@ -27,10 +29,16 @@ export function VerdictScreen({ route }: Props) {
   const { userId, coupleId } = usePairedContext();
   const kase = useCase(coupleId, caseId);
   const profiles = useQuery({ queryKey: qk.profiles(coupleId), queryFn: fetchCoupleProfiles });
+  const appeals = useAppeals(coupleId);
   const defense = useSubmitDefense(coupleId, caseId);
   const retry = useRetryVerdict(caseId);
+  const fileAppeal = useFileAppeal(coupleId, caseId);
   const [plea, setPlea] = useState('');
-  const now = useNow(1000, kase.data?.status !== 'JUDGED');
+  const [appealing, setAppealing] = useState(false);
+  const [reason, setReason] = useState('');
+  // Judged cases still count down while an appeal could follow.
+  const roundsUsed = (appeals.data ?? []).filter((a) => a.case_id === caseId).length;
+  const now = useNow(1000, kase.data?.status !== 'JUDGED' || roundsUsed < MAX_APPEALS);
 
   if (kase.isPending) return <LoadingView label="Dosya getiriliyor…" />;
   if (!kase.data) {
@@ -49,6 +57,8 @@ export function VerdictScreen({ route }: Props) {
   const iAmDefendant = c.defendant_id === userId;
   const remaining = new Date(c.defense_deadline).getTime() - now;
   const meta = categoryMeta(c.category);
+  const view = appealView(c, appeals.data ?? [], now);
+  const firstInstance = verdictOf(c);
 
   return (
     <Screen insetTop={false} refreshing={kase.isRefetching} onRefresh={() => void kase.refetch()}>
@@ -130,34 +140,73 @@ export function VerdictScreen({ route }: Props) {
         </Card>
       ) : null}
 
-      {phase === 'JUDGED' && c.fault_ratio_prosecutor !== null && c.fault_ratio_defendant !== null ? (
-        <View className="mt-2">
-          <SectionTitle>Kusur dağılımı</SectionTitle>
-          <Card>
-            <FaultBar
-              leftLabel={prosecutor}
-              leftValue={c.fault_ratio_prosecutor}
-              rightLabel={defendant}
-              rightValue={c.fault_ratio_defendant}
-            />
-          </Card>
+      {firstInstance ? (
+        <VerdictBody
+          key={`first-${view.currentRound === 0}`}
+          title="İlk derece kararı"
+          verdict={firstInstance}
+          prosecutor={prosecutor}
+          defendant={defendant}
+          current={view.currentRound === 0}
+        />
+      ) : null}
 
-          <SectionTitle>⚖️ Ağır Ceza Hâkimi</SectionTitle>
-          <Card className="border-l-4 border-court">
-            <Text className="text-base leading-6 text-ink">{c.verdict_judge}</Text>
-          </Card>
+      <ErrorBanner error={appeals.error} onRetry={() => void appeals.refetch()} />
+      {view.rounds.map((a) => (
+        <AppealRound
+          key={a.id}
+          appeal={a}
+          coupleId={coupleId}
+          userId={userId}
+          nameOf={nameOf}
+          prosecutor={prosecutor}
+          defendant={defendant}
+          current={view.currentRound === a.round}
+          now={now}
+        />
+      ))}
 
-          <SectionTitle>🎤 Zabıt Kâtibinin Şerhi</SectionTitle>
-          <Card className="border-l-4 border-rose">
-            <Text className="text-base italic leading-6 text-ink">{c.verdict_comedian}</Text>
-          </Card>
-
-          <SectionTitle>Hüküm</SectionTitle>
-          <Card className="bg-amber-soft">
-            <Text className="text-base font-semibold leading-6 text-ink">🧾 {c.penalty}</Text>
-            <Text className="mt-2 text-xs text-ink-mute">Karar tarihi {formatDateTime(c.judged_at)}</Text>
-          </Card>
-        </View>
+      {view.canAppeal && view.windowEndsAt !== null ? (
+        <Card className="mt-6 border-2 border-court">
+          <Text className="text-base font-semibold text-ink">Karara itiraz et</Text>
+          <Text className="mt-1 text-xs text-ink-mute">
+            Kalan itiraz hakkı: {view.remaining}/{MAX_APPEALS} · Süre: {formatCountdown(view.windowEndsAt - now)}
+          </Text>
+          {appealing ? (
+            <View className="mt-3">
+              <ErrorBanner error={fileAppeal.error} />
+              <TextField
+                label="İtiraz gerekçen"
+                value={reason}
+                onChangeText={setReason}
+                multiline
+                maxLength={APPEAL_TEXT_MAX}
+                counter
+                placeholder="Neden yeniden bakılmalı? Karşı taraf 12 saat içinde cevap verebilir."
+              />
+              <AppButton
+                label="İtirazı gönder"
+                variant="court"
+                disabled={reason.trim().length < APPEAL_REASON_MIN}
+                loading={fileAppeal.isPending}
+                onPress={() =>
+                  fileAppeal.mutate(reason, {
+                    onSuccess: () => {
+                      setReason('');
+                      setAppealing(false);
+                    },
+                  })
+                }
+              />
+            </View>
+          ) : (
+            <AppButton label="İtiraz et" variant="secondary" size="sm" className="mt-3" onPress={() => setAppealing(true)} />
+          )}
+        </Card>
+      ) : c.status === 'JUDGED' && view.current && !view.open ? (
+        <Text className="mt-5 text-center text-xs text-ink-mute">
+          {view.remaining === 0 ? 'İki itiraz hakkı da kullanıldı; karar kesinleşti.' : 'İtiraz süresi doldu; karar kesinleşti.'}
+        </Text>
       ) : null}
     </Screen>
   );
