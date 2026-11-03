@@ -85,8 +85,12 @@ Cron: `duosync-release-messages` (1 min), `duosync-court-sweep` (10 min),
 ## Environment cautions
 - The Supabase MCP connected to this account points at a **different project**
   (`jvkytncwedjcvssilhih`, gym app). **Do not apply DuoSync migrations or deploy
-  functions there.** DuoSync has its own project since 2026-10-31: ref `gfjkepyaubdstinqgtqw`.
-  Before any live call, check `get_project_url` returns that ref.
+  functions there.** DuoSync's project ref is **`ndxpbbvfgupxlgoqoesh`** (confirmed by the user
+  2026-11-03; `gfjkepyaubdstinqgtqw`, recorded earlier, is not DuoSync). Before any live call, check
+  `get_project_url` returns that ref.
+- `.mcp.json` registers Supabase's MCP server scoped to that ref for local Claude Code
+  (authenticate once with `/mcp`). Cloud sessions cannot reach `mcp.supabase.com` (network
+  policy) and use the claude.ai Supabase connector instead.
 - Never commit `.env`, API keys or Vault secrets. Vault secrets are created by hand
   in the SQL editor (see README §Kurulum).
 - Dependencies: `EXPO_OFFLINE=1 npx expo install <pkg>` for SDK-matched versions.

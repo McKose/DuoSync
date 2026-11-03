@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-11-02 (C3 appeals built; rule #3 caveat accepted as option (a)).
+Last updated: 2026-11-03 (DuoSync project ref corrected; `.mcp.json` added).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -18,6 +18,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-10-31 | **C1 decision wheel** built while A1 waits on the user: migration `20261031000000_decision_wheel.sql` (`wheel_options`, `wheel_spins`, RPCs `add_wheel_option` / `remove_wheel_option` / `spin_wheel`, SELECT-only RLS, Realtime), demo mirror + panel action "Deniz çarkı çevirsin", `DecisionWheelScreen` built with core `Animated` + plain Views (no SVG/Reanimated → no new device risk ahead of A4). Mutation-tested: dropping the cooldown or granting direct INSERT each fails a test. Fixed during E2E review: labels were oriented for the unrotated wheel and read upside down at rest | test:db 54/54, test:demo 24/24, E2E 12/12 |
 | 2026-10-31 | User created the DuoSync Supabase project (`gfjkepyaubdstinqgtqw`); connector still points at the gym project, so nothing deployed yet. Decisions recorded: C3 rules (12 h, max 2), B2 = delete. **B2 unpair** built: migration `20261031000100_leave_couple.sql`, `COUPLE_ENDED` push type, Dashboard "Eşleşmeyi sonlandır" + confirm, demo mirror + panel action, both devices drop cached couple data and queued edits. `live_check.sql` row 14 added (Data API table grants), because the migrations rely on Supabase's default grants | test:db 58/58, test:demo 26/26, E2E 13/13 |
 | 2026-11-02 | User decisions: C3 sub-rules = Claude's proposals; rule #3 caveat = option (a). **C3 appeals** built: migration `20261102000000_appeals.sql` (`court_appeals`, `appeal_status`, client RPCs `file_appeal` / `reply_appeal`, service RPCs `claim_appeal_for_verdict` / `complete_appeal_verdict` / `fail_appeal_verdict` / `list_claimable_appeals`, `APPEAL_FILED` push, reply → verdict webhook, Realtime); Edge Function judges `{ appeal_id }` (webhook, sweep, client fallback) with a fenced appeal prompt; Verdict screen shows the history with "Geçerli karar"; demo mirror + panel action. Found in screenshot review and fixed: appeal button/"karar kesinleşti" note shown for a moment while the cached case still read JUDGED; Turkish uppercase titles rendered "ISTINAF"/"ŞERHI" on web → `web.lang = "tr"` (pre-existing, app-wide) | test:db 65/65, test:functions 8/8, test:demo 31/31, E2E 14/14 |
+| 2026-11-03 | **Correction:** the user confirmed DuoSync's Supabase project is `ndxpbbvfgupxlgoqoesh`; `gfjkepyaubdstinqgtqw` (row of 2026-10-31) is not DuoSync. Added `.mcp.json` (Supabase MCP scoped to `ndxpbbvfgupxlgoqoesh`) for local Claude Code. Cloud sessions: `mcp.supabase.com` is blocked by the environment's network policy (proxy 403), so A1 from the cloud needs the claude.ai Supabase connector pointed at this project | nothing deployed yet |
 
 ## 2. Current state
 
@@ -33,7 +34,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | İstinaf (C3) | ✅ code + tests (server, function, demo, E2E), ❌ never hit live Gemini |
 | Eşleşme bozma (B2) | ✅ code + tests, ❌ not live yet; rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
-| Live Supabase project | 🟡 created (`gfjkepyaubdstinqgtqw`, 2026-10-31), not yet migrated/deployed |
+| Live Supabase project | 🟡 created (`ndxpbbvfgupxlgoqoesh`), not yet migrated/deployed |
 | Physical device run | ❌ never |
 
 ## 3. Product decisions
@@ -62,7 +63,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 
 ### Phase A — Go live (blocks everything)
 
-- [ ] **A1. Dedicated Supabase project** (0.5 d)
+- [ ] **A1. Dedicated Supabase project** (0.5 d) — project exists: `ndxpbbvfgupxlgoqoesh`
   Create a new project (NOT the gym project the MCP is linked to). `supabase link`, `db push`,
   create Vault secrets `duosync_project_url`, `duosync_internal_secret`; set function secrets
   `GEMINI_API_KEY`, `INTERNAL_WEBHOOK_SECRET`, optional `GEMINI_MODEL`; deploy both functions.
