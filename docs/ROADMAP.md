@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-11-04 (A1 in progress on `ndxpbbvfgupxlgoqoesh`: migrated, functions deployed, function secrets pending).
+Last updated: 2026-11-04 (A1 + A2 done on `ndxpbbvfgupxlgoqoesh`; A3 in progress: first real Gemini call hit 503 / timeout).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -19,7 +19,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-10-31 | User created the DuoSync Supabase project (`gfjkepyaubdstinqgtqw`); connector still points at the gym project, so nothing deployed yet. Decisions recorded: C3 rules (12 h, max 2), B2 = delete. **B2 unpair** built: migration `20261031000100_leave_couple.sql`, `COUPLE_ENDED` push type, Dashboard "Eşleşmeyi sonlandır" + confirm, demo mirror + panel action, both devices drop cached couple data and queued edits. `live_check.sql` row 14 added (Data API table grants), because the migrations rely on Supabase's default grants | test:db 58/58, test:demo 26/26, E2E 13/13 |
 | 2026-11-02 | User decisions: C3 sub-rules = Claude's proposals; rule #3 caveat = option (a). **C3 appeals** built: migration `20261102000000_appeals.sql` (`court_appeals`, `appeal_status`, client RPCs `file_appeal` / `reply_appeal`, service RPCs `claim_appeal_for_verdict` / `complete_appeal_verdict` / `fail_appeal_verdict` / `list_claimable_appeals`, `APPEAL_FILED` push, reply → verdict webhook, Realtime); Edge Function judges `{ appeal_id }` (webhook, sweep, client fallback) with a fenced appeal prompt; Verdict screen shows the history with "Geçerli karar"; demo mirror + panel action. Found in screenshot review and fixed: appeal button/"karar kesinleşti" note shown for a moment while the cached case still read JUDGED; Turkish uppercase titles rendered "ISTINAF"/"ŞERHI" on web → `web.lang = "tr"` (pre-existing, app-wide) | test:db 65/65, test:functions 8/8, test:demo 31/31, E2E 14/14 |
 | 2026-11-03 | **Correction:** the user confirmed DuoSync's Supabase project is `ndxpbbvfgupxlgoqoesh`; `gfjkepyaubdstinqgtqw` (row of 2026-10-31) is not DuoSync. Added `.mcp.json` (Supabase MCP scoped to `ndxpbbvfgupxlgoqoesh`) for local Claude Code. Cloud sessions: `mcp.supabase.com` is blocked by the environment's network policy (proxy 403), so A1 from the cloud needs the claude.ai Supabase connector pointed at this project | nothing deployed yet |
-| 2026-11-03..04 | **A1 on `ndxpbbvfgupxlgoqoesh`** via the claude.ai Supabase connector (ref checked before every call). All 5 migrations applied; MCP records apply timestamps as versions → aligned to the file names (repair-equivalent). Live schema compared with the PGlite build by per-category md5 fingerprints (functions, policies, columns, constraints, indexes, triggers, table/column/function grants, RLS, enums, publication, cron jobs): identical; only extra object is Supabase's own `public.rls_auto_enable()` (automatic-RLS event trigger). Found + fixed: `live_check` row 13 flagged that function → event-trigger fns only need *a* pinned path; functions read the server key via `serviceKey()` (`SUPABASE_SECRET_KEYS.default`, legacy `SUPABASE_SERVICE_ROLE_KEY` fallback). Both functions deployed (ACTIVE, `verify_jwt=false`). Vault: `duosync_project_url` + `duosync_internal_secret` (64 hex, generated in-DB, never selected). Pending: function secrets `INTERNAL_WEBHOOK_SECRET` (= Vault value) and `GEMINI_API_KEY`, entered by the user | test:db 65/65, test:functions 9/9; live_check after secrets |
+| 2026-11-03..04 | **A1 on `ndxpbbvfgupxlgoqoesh`** via the claude.ai Supabase connector (ref checked before every call). All 5 migrations applied; MCP records apply timestamps as versions → aligned to the file names (repair-equivalent). Live schema compared with the PGlite build by per-category md5 fingerprints (functions, policies, columns, constraints, indexes, triggers, table/column/function grants, RLS, enums, publication, cron jobs): identical; only extra object is Supabase's own `public.rls_auto_enable()` (automatic-RLS event trigger). Found + fixed: `live_check` row 13 flagged that function → event-trigger fns only need *a* pinned path; functions read the server key via `serviceKey()` (`SUPABASE_SECRET_KEYS.default`, legacy `SUPABASE_SERVICE_ROLE_KEY` fallback). Both functions deployed (ACTIVE, `verify_jwt=false`). Vault: `duosync_project_url` + `duosync_internal_secret` (64 hex, generated in-DB, never selected). User then entered `INTERNAL_WEBHOOK_SECRET` (= Vault value) and `GEMINI_API_KEY` in the dashboard (the connector's secret prompt would not open). Before that every sweep got 500 (`Missing required env var GEMINI_API_KEY` at boot); after it a manual sweep got 202 and `sweep results []`, proving key + secret + service key end to end | test:db 65/65, test:functions 9/9; **live_check 14/14 at 18:15 UTC**, both functions ACTIVE |
 
 ## 2. Current state
 
@@ -35,7 +35,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | İstinaf (C3) | ✅ code + tests (server, function, demo, E2E), ❌ never hit live Gemini |
 | Eşleşme bozma (B2) | ✅ code + tests, ❌ not live yet; rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
-| Live Supabase project | 🟡 `ndxpbbvfgupxlgoqoesh`: 5 migrations + 3 cron jobs + both functions live, Vault set; function secrets pending (user) |
+| Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 5 migrations, 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
 | Physical device run | ❌ never |
 
 ## 3. Product decisions
@@ -66,7 +66,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 
 ### Phase A — Go live (blocks everything)
 
-- [ ] **A1. Dedicated Supabase project** (0.5 d) — project exists: `ndxpbbvfgupxlgoqoesh`
+- [x] **A1. Dedicated Supabase project** (0.5 d) — done 2026-11-04: `ndxpbbvfgupxlgoqoesh`, `live_check` 14/14, both functions ACTIVE
   Create a new project (NOT the gym project the MCP is linked to). `supabase link`, `db push`,
   create Vault secrets `duosync_project_url`, `duosync_internal_secret`; set function secrets
   `GEMINI_API_KEY`, `INTERNAL_WEBHOOK_SECRET`, optional `GEMINI_MODEL`; deploy both functions.
