@@ -466,8 +466,15 @@ await test('paired users cannot join a third couple', async () => {
 });
 
 console.log('Decision wheel');
+/** Labels in display order: (created_at, id), the order spin_wheel() snapshots and the client lists. */
 const optionLabels = async (who) =>
   (await as(who, `select label from public.wheel_options order by created_at, id`)).rows.map((r) => r.label);
+/**
+ * Labels as a set. PGlite's clock has millisecond resolution, so options added in
+ * the same millisecond tie on created_at and the random uuid decides their order;
+ * insertion order is not observable here (CI failure on 83036f5).
+ */
+const optionSet = async (who) => (await optionLabels(who)).sort();
 /** Move every spin back a minute so the 10 s cooldown does not block the next one. */
 const pastCooldown = () => su(`update public.wheel_spins set created_at = created_at - interval '1 minute'`);
 
@@ -477,8 +484,8 @@ await test('both partners add options; label validation and case-insensitive dup
   await rejects(as(A, `select * from public.add_wheel_option('   ')`), /INVALID_OPTION_LABEL/);
   await rejects(as(A, `select * from public.add_wheel_option($1)`, ['x'.repeat(31)]), /INVALID_OPTION_LABEL/);
   await rejects(as(B, `select * from public.add_wheel_option('sushi')`), /DUPLICATE_OPTION/);
-  assert.deepEqual(await optionLabels(A), ['Sushi', 'Köfte']);
-  assert.deepEqual(await optionLabels(B), ['Sushi', 'Köfte']);
+  assert.deepEqual(await optionSet(A), ['Köfte', 'Sushi']);
+  assert.deepEqual(await optionSet(B), ['Köfte', 'Sushi']);
 });
 
 await test('stranger and other couple: no visibility, cannot add or remove', async () => {
@@ -550,7 +557,7 @@ await test('partner can remove an option; draw covers every option; history capp
   for (const [i, row] of extra.rows.entries()) await as(i % 2 ? A : B, `select public.remove_wheel_option($1)`, [row.id]);
   await as(B, `select * from public.add_wheel_option('Pide')`);
   await as(A, `select * from public.add_wheel_option('Döner')`);
-  assert.deepEqual(await optionLabels(A), ['Sushi', 'Pide', 'Döner']);
+  assert.deepEqual(await optionSet(A), ['Döner', 'Pide', 'Sushi']);
   const wins = new Set();
   for (let i = 0; i < 60; i++) {
     await pastCooldown();
