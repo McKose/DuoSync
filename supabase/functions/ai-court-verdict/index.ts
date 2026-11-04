@@ -19,7 +19,7 @@
 // so a client cannot inject a fabricated defense.
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { bearerToken, corsHeaders, isInternalCall, json, requireEnv } from '../_shared/http.ts';
+import { bearerToken, corsHeaders, isInternalCall, json, requireEnv, serviceKey } from '../_shared/http.ts';
 import {
   buildAppealPrompt,
   buildUserPrompt,
@@ -33,7 +33,7 @@ import {
 } from '../_shared/verdict.ts';
 
 const SUPABASE_URL = requireEnv('SUPABASE_URL');
-const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+const SERVICE_ROLE_KEY = serviceKey();
 const GEMINI_API_KEY = requireEnv('GEMINI_API_KEY');
 // gemini-1.5-flash (in the original spec) was shut down on 2025-09-29.
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash';

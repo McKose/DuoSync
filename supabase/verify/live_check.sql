@@ -115,8 +115,12 @@ definer_path as (
     select string_agg(n.nspname || '.' || p.proname, ', ' order by n.nspname, p.proname) as list
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname in ('public', 'private') and p.prosecdef
+      -- Event-trigger functions are not callable through the Data API; Supabase's own
+      -- public.rls_auto_enable() ("automatic RLS") pins search_path=pg_catalog. Those
+      -- only need *a* pinned path, every other definer function needs ''.
       and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) cfg
-                      where cfg in ('search_path=""', 'search_path='))
+                      where cfg in ('search_path=""', 'search_path=')
+                         or (p.prorettype = 'event_trigger'::regtype and cfg like 'search_path=_%'))
 )
 select n, item, ok, detail from (
     select 1 as n, 'migrations applied (5)' as item, mig.n = 5 as ok, mig.versions as detail from mig

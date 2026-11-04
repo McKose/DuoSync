@@ -88,6 +88,8 @@ npx supabase functions deploy ai-court-verdict send-push-notification
 
 `duosync_internal_secret` için `openssl rand -hex 32` yeterli; aynı dize `INTERNAL_WEBHOOK_SECRET` olarak da girilmeli.
 
+Sunucu anahtarı elle girilmez: Supabase fonksiyonlara `SUPABASE_SECRET_KEYS` (yeni `sb_secret_…` anahtarı, `default`) ve eski projelerde `SUPABASE_SERVICE_ROLE_KEY` enjekte eder. `_shared/http.ts` → `serviceKey()` önce yenisini, yoksa eskisini kullanır (eski JWT anahtarları 2026 sonunda kapanıyor).
+
 **Kurulum doğrulaması:** deploy'dan ≥ 10 dk sonra (mahkeme süpürmesi bir kez çalışmış olsun) `supabase/verify/live_check.sql` dosyasını SQL editöründe çalıştırın; 14 satırın hepsi `ok = true` olmalı. Satır 8 (webhook gidiş-dönüş) hatalıysa detay sütunu nedeni söyler: 401 = gateway JWT doğrulaması açık, 403 = iki secret farklı, 404 = fonksiyon deploy edilmemiş veya proje URL'si yanlış. Fonksiyonların `ACTIVE` olduğunu `npx supabase functions list` ile kontrol edin.
 
 ### 3. Push bildirimleri

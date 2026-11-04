@@ -749,6 +749,11 @@ insert into net._http_response (status_code, content) values (202, '{"accepted":
 update vault.decrypted_secrets set decrypted_secret = repeat('ab', 32) where name = 'duosync_internal_secret';
 update vault.decrypted_secrets set decrypted_secret = 'https://abcdefghijklmnopqrst.supabase.co'
   where name = 'duosync_project_url';
+-- Supabase-managed ("automatic RLS"): definer event trigger fn pinned to pg_catalog.
+create function public.rls_auto_enable() returns event_trigger
+  language plpgsql security definer set search_path = pg_catalog as $$ begin end $$;
+revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
+grant execute on function public.rls_auto_enable() to service_role;
 `);
 // Check 2 (pg_cron/pg_net in pg_extension) cannot pass on PGlite: both are stubbed schemas.
 const failingRows = async () =>
@@ -770,9 +775,18 @@ await test('misconfigurations are flagged on the right row', async () => {
     create table public.leaky (id int);
     grant execute on function public.release_due_messages() to authenticated;
     revoke select on public.court_cases from service_role;
+    create function public.unpinned_definer() returns int
+      language sql security definer as $$ select 1 $$;
+    create function public.unpinned_event_fn() returns event_trigger
+      language plpgsql security definer as $$ begin end $$;
   `);
-  const nums = (await failingRows()).map((s) => Number(s.split(' ')[0]));
-  assert.deepEqual(nums, [4, 6, 7, 8, 9, 12, 14]);
+  const rows = await failingRows();
+  // 11 too: new functions are executable by PUBLIC (hence anon) unless revoked.
+  assert.deepEqual(rows.map((s) => Number(s.split(' ')[0])), [4, 6, 7, 8, 9, 11, 12, 13, 14]);
+  const row13 = rows.find((s) => s.startsWith('13 '));
+  assert.match(row13, /public\.unpinned_definer/);
+  assert.match(row13, /public\.unpinned_event_fn/);
+  assert.doesNotMatch(row13, /rls_auto_enable/);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);
