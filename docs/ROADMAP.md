@@ -108,6 +108,10 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   before generation (no token cost); a timeout may have generated (possible cost). Options kept in the backlog.
   Plan: let the sweep retry; if the test case hits the cap, reset its `verdict_attempts` (test data only) and retry
   when Gemini recovers; then delete the test data.
+  *Outcome of the first window:* the risk materialised on the test case — 5/5 claims used by 18:51 (≈ 39 min):
+  10 Gemini calls = 7 × 503 + 3 × 45 s timeout (18:12 #1, 18:50 #1 and #2). The two 18:50 timeouts may mean the
+  model was serving again but slower than 45 s; that cannot be told apart from overload until one call completes.
+  Next: reset `verdict_attempts` on the test row after ≈ 1 h and invoke one sweep by hand.
 - [ ] **A4. Android dev build on 2 physical phones** (1–2 d)
   `eas init`, `eas build --profile development -p android`. Walk every screen.
   If NativeWind 4.2 + Reanimated 4 + RN 0.86 breaks, record it here and decide: NativeWind 5 RC vs StyleSheet.
