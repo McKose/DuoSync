@@ -48,6 +48,8 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 - Store → order below as written; C2 on iOS is limited to *Time Sensitive*.
 
 A1 setup is done **by the user** (project creation, keys, `db push`, deploy); Claude verifies.
+2026-11-03 (user): Claude ran A1 through the claude.ai Supabase connector instead; the user created the project and
+entered the two function secrets in the dashboard (values never passed through the chat).
 
 **C3 appeal rules — DECIDED 2026-10-31 / 2026-11-02 (user):** 12 h appeal window from the latest verdict;
 at most 2 appeals **per case**; **either party** may appeal; the other side may **reply within 12 h**, after
