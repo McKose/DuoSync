@@ -146,6 +146,18 @@ await test('third party C cannot see the couple', async () => {
   assert.equal(r.rows.length, 0);
 });
 
+// A2: the advisor flags these RLS helpers because /rest/v1/rpc exposes them
+// (authenticated needs EXECUTE for the policies). Justified only while they
+// answer about the caller's own couple and nothing else.
+await test('RLS helpers callable as RPCs answer only about the caller', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  const q = `select public.is_couple_member($1) as member, public.is_my_partner($2) as partner,
+                    public.is_my_partner($3) as other`;
+  assert.deepEqual((await as(A, q, [cid, B, C])).rows[0], { member: true, partner: true, other: false });
+  assert.deepEqual((await as(C, q, [cid, A, B])).rows[0], { member: false, partner: false, other: false });
+  await rejects(as('anon', `select public.is_couple_member($1)`, [cid]), /permission denied/);
+});
+
 await test('C cannot reuse the consumed code; failures are throttled at 10/h', async () => {
   for (let i = 0; i < 10; i++) {
     const r = await as(C, `select * from public.pair_with_code($1)`, [code]);

@@ -150,7 +150,9 @@ select n, item, ok, detail from (
            'codes: ' || http.codes
            || case when http.n_bad > 0
                    then ' | 401=gateway JWT on (deploy --no-verify-jwt), 403=INTERNAL_WEBHOOK_SECRET'
-                        || ' != vault secret, 404=function not deployed or wrong project url'
+                        || ' != vault secret, 404=function not deployed or wrong project url,'
+                        || ' 500=function crashed at boot (missing GEMINI_API_KEY? see function logs);'
+                        || ' errors from before a fix age out of this 15 min window'
                    when http.n_sweep_ok = 0 then ' | no sweep yet: wait for the next */10 run'
                    else '' end
     from http

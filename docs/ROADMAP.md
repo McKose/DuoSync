@@ -76,15 +76,19 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   (harmless, every table enables RLS itself); GitHub integration not connected for now.
   *Verify:* ≥ 10 min after deploy run `supabase/verify/live_check.sql` in the SQL editor → all 14 rows
   `ok = true` (row 8 proves URL + secret + deploy end-to-end via the sweep's 202); `npx supabase functions list` → both ACTIVE.
-- [ ] **A2. Advisor audit** (0.5 d)
+- [x] **A2. Advisor audit** (0.5 d) — done 2026-11-04 on `ndxpbbvfgupxlgoqoesh` (advisors run 18:02 UTC, after all 5 migrations)
   Run security + performance advisors; fix every ERROR/WARN in a new migration; mirror in tests.
   *Accept:* zero security ERRORs; WARNs either fixed or justified in this file.
-  Predicted from the schema (confirm against real advisor output):
-  - Performance WARN `multiple_permissive_policies` on `delayed_messages` (sender + recipient SELECT
-    policies for `authenticated`). Proposed: justify, do not merge — 2-user scale makes the cost nil,
-    and a merged OR-policy obscures rule #3 (recipient sees only `SENT`).
-  - INFO `rls_enabled_no_policy` on `pairing_attempts` — intentional deny-all (RPC-only access).
-  - `auth_rls_initplan` not expected: all policies already use `(select auth.uid())`.
+  *Result:* **0 ERROR.** No finding needed a schema change, so no migration. The pre-advisor predictions held
+  (`multiple_permissive_policies`, `rls_enabled_no_policy`; no `auth_rls_initplan`); three lints were not predicted (★).
+  | Level | Lint | Where | Decision |
+  |---|---|---|---|
+  | WARN | ★ `authenticated_security_definer_function_executable` (0029) ×17 | every client RPC in CLAUDE.md (`file_case` … `reply_appeal`) | **Justified — by design.** Rule #1: business-rule writes go only through SECURITY DEFINER RPCs (`search_path = ''`, EXECUTE granted to `authenticated` only; `live_check` rows 11–13). Each RPC derives the actor from `auth.uid()` and re-checks membership. |
+  | WARN | ★ same lint ×2 | `is_couple_member(cid)`, `is_my_partner(pid)` (RLS helpers) | **Justified.** Policies run as the caller, so `authenticated` needs EXECUTE, which also exposes `/rest/v1/rpc/…`. Both answer only about the caller's own active couple (`auth.uid()`), which the caller can already read; anon cannot call them. Pinned by the PGlite test "RLS helpers callable as RPCs answer only about the caller" (mutation-checked: drop the `auth.uid()` condition → it fails). Alternative, not done: move both to `private` (not exposed). Every policy follows the function by OID, but 7 plpgsql RPC bodies resolve the name at runtime and would have to be re-created, plus rule #1's wording — a core rewrite for an oracle with nothing to leak. Revisit for a store release. |
+  | WARN | `multiple_permissive_policies` | `delayed_messages` SELECT (`delayed_sender_reads_own`, `delayed_recipient_reads_sent`) | **Justified.** 2-user scale makes the second policy free; a merged OR-policy would hide rule #3 (recipient sees only `SENT`) inside one expression. |
+  | INFO | `rls_enabled_no_policy` | `pairing_attempts` | Intentional deny-all; written and read only by `pair_with_code()` / the prune job. |
+  | INFO | ★ `unindexed_foreign_keys` ×11 | user-id FKs (`prosecutor_id`, `sender_id`, `created_by`, …) and `court_appeals (case_id, couple_id)` | Accepted at personal scale (hundreds of rows): only matters when a profile or case is deleted (seq scan of the child table). Profiles are never deleted until B1; add the indexes with B1. |
+  | INFO | ★ `unused_index` ×6 | `*_couple*` indexes | No traffic yet (empty project). Re-run the performance advisor after A5 before dropping anything. |
 - [ ] **A3. Gemini live check** (0.5 d)
   Verify model id exists (`GET /v1beta/models`), `responseSchema` accepted, one real verdict
   stored with ratios summing to 100. Update default model if needed.
