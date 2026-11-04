@@ -25,7 +25,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 
 | Area | State |
 |---|---|
-| AI Mahkemesi (file → defense / 24 h timeout → verdict) | ✅ code + tests, ❌ never hit live Gemini |
+| AI Mahkemesi (file → defense / 24 h timeout → verdict) | ✅ code + tests; 🟡 live chain verified up to the Gemini call, first live calls got 503 overload (A3) |
 | Soğuma Odası (15–60 min delay, silent cancel) | ✅ code + tests, ❌ live Realtime leak test pending |
 | Soru Kasası | ✅ |
 | Canlı Masa: plans + checklist (offline, per-item LWW) | ✅ |
@@ -96,6 +96,18 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   stored with ratios summing to 100. Update default model if needed.
   *Accept:* a `court_cases` row reaches `JUDGED` from a real call; function logs clean.
   (Was "`DECIDED`" until 2026-10-31 — no such `case_status` value; a check on it would never match.)
+  *Progress 2026-11-04:* test users `a3-test-{a,b}@duosync.invalid` (inserted into `auth.users`, no password) paired via
+  the real RPCs; `file_case` → `submit_defense` → webhook 202 → `claim_case_for_verdict` → `DELIBERATING` all worked live.
+  Gemini: 18:12 attempt 1 = our 45 s timeout, attempt 2 = **503** "model is currently experiencing high demand";
+  18:20 sweep = 503 × 2. `gemini-3.8-flash` therefore exists (a wrong id is 404); the official model list could not be
+  read (`ai.google.dev` blocked by the cloud session's network); web sources disagree on 3.7 vs 3.8 as newest.
+  Error path behaved as designed (claim released, `verdict_attempts` 2/5, sweep retries).
+  **Risk recorded (user decision 2026-11-04: leave the policy as is for now):** every failed claim consumes one of
+  5 attempts regardless of cause, so with the 10-min sweep a provider overload longer than ≈ 40 min kills the case
+  ("Heyet bu davayı 5 denemede karara bağlayamadı"; refiling costs one of the 5 daily cases). 503/429 are rejected
+  before generation (no token cost); a timeout may have generated (possible cost). Options kept in the backlog.
+  Plan: let the sweep retry; if the test case hits the cap, reset its `verdict_attempts` (test data only) and retry
+  when Gemini recovers; then delete the test data.
 - [ ] **A4. Android dev build on 2 physical phones** (1–2 d)
   `eas init`, `eas build --profile development -p android`. Walk every screen.
   If NativeWind 4.2 + Reanimated 4 + RN 0.86 breaks, record it here and decide: NativeWind 5 RC vs StyleSheet.
@@ -180,6 +192,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 | Task | Trigger |
 |---|---|
 | `push_tokens` PK → `(user_id, token)` | a user uses a second device |
+| Overload-aware verdict retries (A3 finding): 503/429 do not consume the 5-claim cap, back off 10 → 20 → 40 min … ≤ 6 h, give up 24 h after the defense; optional `GEMINI_FALLBACK_MODEL` on 503 (id must be verified first). Cases + appeals, demo mirror, tests ≈ 0.5–0.75 d | a real case or appeal dies after 5 × 503, or Gemini overload keeps showing up in function logs |
 | Cooling-off latency < 60 s via Supabase Queues | user complaint |
 | Store assets, iOS build | store decision |
 | B1, B3, D1 | store decision |
