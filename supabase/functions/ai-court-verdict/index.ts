@@ -36,7 +36,10 @@ const SUPABASE_URL = requireEnv('SUPABASE_URL');
 const SERVICE_ROLE_KEY = serviceKey();
 const GEMINI_API_KEY = requireEnv('GEMINI_API_KEY');
 // gemini-1.5-flash (in the original spec) was shut down on 2025-09-29.
-const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash';
+// gemini-3.8-flash answered 503 "high demand" on every live call for 14 h
+// (ROADMAP A3, 2026-11-04/05), so the default is the lighter GA Flash-Lite.
+// Set GEMINI_MODEL to switch back without a deploy.
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
 // Override only for local/integration testing against a stub server.
 const GEMINI_BASE_URL = Deno.env.get('GEMINI_BASE_URL') ?? 'https://generativelanguage.googleapis.com';
 

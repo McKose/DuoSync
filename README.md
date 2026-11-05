@@ -8,7 +8,7 @@
 | Stil | NativeWind 4.2 (Tailwind 3) |
 | State | Zustand (kimlik/çift) + TanStack Query v5 (sunucu verisi, offline persist) |
 | Backend | Supabase: Postgres + RLS, Realtime, Edge Functions (Deno), pg_cron, pg_net, Vault |
-| AI | Gemini Flash (`gemini-3.8-flash` varsayılan, `GEMINI_MODEL` ile değiştirilebilir) — structured JSON |
+| AI | Gemini Flash-Lite (`gemini-3.5-flash-lite` varsayılan, `GEMINI_MODEL` ile değiştirilebilir; `gemini-3.8-flash` canlıda sürekli 503 verdi, ROADMAP A3) — structured JSON |
 
 ---
 
@@ -79,7 +79,7 @@ npx supabase db push                          # beş migration
 npx supabase secrets set \
   GEMINI_API_KEY=<key> \
   INTERNAL_WEBHOOK_SECRET=<vault'takiyle aynı dize> \
-  GEMINI_MODEL=gemini-3.8-flash           # opsiyonel
+  GEMINI_MODEL=gemini-3.5-flash-lite      # opsiyonel (varsayılan bu)
 # EXPO_ACCESS_TOKEN=<token>               # opsiyonel: Expo "enhanced push security"
 
 npx supabase functions deploy ai-court-verdict send-push-notification

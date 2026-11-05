@@ -14,8 +14,8 @@ hole and an unauthenticated verdict endpoint).
 Expo SDK 57 · RN 0.86 · TS strict · NativeWind 4.2 (Tailwind 3) · Reanimated 4 ·
 React Navigation 7 (NOT Expo Router) · Zustand 5 · TanStack Query 5 (+ AsyncStorage
 persist) · Supabase (Postgres/RLS, Realtime, Edge Functions on Deno, pg_cron,
-pg_net, Vault) · Gemini Flash via `GEMINI_MODEL` env (default `gemini-3.8-flash`,
-**unverified against the live API**).
+pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite` since
+2026-11-05: `gemini-3.8-flash` exists but returned 503 "high demand" for 14 h — ROADMAP A3).
 
 ## Repo map
 | Path | What |
