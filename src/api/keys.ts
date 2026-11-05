@@ -4,11 +4,14 @@ export const qk = {
   couple: (userId: string) => ['couple', userId] as const,
   profiles: (coupleId: string) => ['profiles', coupleId] as const,
   cases: (coupleId: string) => ['cases', coupleId] as const,
+  appeals: (coupleId: string) => ['appeals', coupleId] as const,
   case: (caseId: string) => ['case', caseId] as const,
   plans: (coupleId: string) => ['plans', coupleId] as const,
   plan: (planId: string) => ['plan', planId] as const,
   messages: (coupleId: string) => ['messages', coupleId] as const,
   questions: (coupleId: string) => ['questions', coupleId] as const,
+  wheelOptions: (coupleId: string) => ['wheel-options', coupleId] as const,
+  wheelSpins: (coupleId: string) => ['wheel-spins', coupleId] as const,
 };
 
 export const mk = {

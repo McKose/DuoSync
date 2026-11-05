@@ -6,9 +6,9 @@
 // to the Expo Push API. Unregistered tokens are pruned.
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { isInternalCall, json, requireEnv } from '../_shared/http.ts';
+import { isInternalCall, json, requireEnv, serviceKey } from '../_shared/http.ts';
 
-const admin = createClient(requireEnv('SUPABASE_URL'), requireEnv('SUPABASE_SERVICE_ROLE_KEY'), {
+const admin = createClient(requireEnv('SUPABASE_URL'), serviceKey(), {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 // Optional: enable "Enhanced push security" in Expo and set this.
@@ -20,6 +20,8 @@ const ALLOWED_TYPES = new Set([
   'MESSAGE_RELEASED',
   'QUESTION_ASKED',
   'QUESTION_ANSWERED',
+  'COUPLE_ENDED',
+  'APPEAL_FILED',
 ]);
 
 interface PushRequest {

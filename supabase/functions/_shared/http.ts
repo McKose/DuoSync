@@ -19,6 +19,27 @@ export function requireEnv(name: string): string {
   return v;
 }
 
+/**
+ * Key for the service-role admin client. Prefers the new secret key
+ * (SUPABASE_SECRET_KEYS: JSON keyed by name, Supabase injects `default`) and
+ * falls back to the legacy service_role JWT, which stops working at the end
+ * of 2026 and may be missing on projects created with the new key model.
+ */
+export function serviceKey(env: (name: string) => string | undefined = (n) => Deno.env.get(n)): string {
+  const raw = env('SUPABASE_SECRET_KEYS');
+  if (raw) {
+    try {
+      const key = (JSON.parse(raw) as Record<string, unknown>).default;
+      if (typeof key === 'string' && key.length > 0) return key;
+    } catch {
+      // Malformed JSON: fall through to the legacy key.
+    }
+  }
+  const legacy = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacy) return legacy;
+  throw new Error('Missing server key: set SUPABASE_SECRET_KEYS (default) or SUPABASE_SERVICE_ROLE_KEY');
+}
+
 /** Constant-time string comparison (avoids timing side channels on the secret). */
 export function safeEqual(a: string, b: string): boolean {
   const enc = new TextEncoder();

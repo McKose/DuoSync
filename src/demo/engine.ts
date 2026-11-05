@@ -4,17 +4,22 @@
 // enough that every screen, error and edge case can be tested without a
 // database: same validation and error codes, defense lock + 24h timeout,
 // RLS-equivalent visibility for the cooling-off room (silent cancel), per-item
-// LWW checklist merge, presence/LOW_BATTERY logic and pairing rules.
+// LWW checklist merge, presence/LOW_BATTERY logic, pairing rules, the
+// server-drawn decision wheel (limits, duplicate guard, couple-wide cooldown)
+// and appeals (12 h windows, 2 rounds, reply lock).
 //
 // A simulated partner ("Deniz") reacts on a timer so two-person flows work
 // with one phone. Dependencies (storage, clock, uuid, sleep) are injected so
 // the engine runs unchanged under Node tests.
 
 import { mergeChecklistItem, parseChecklist } from '../lib/checklist';
+import { APPEAL_REASON_MIN, APPEAL_TEXT_MAX, MAX_APPEALS } from '../lib/appeals';
 import { AppError } from '../lib/errors';
+import { WHEEL_COOLDOWN_MS, WHEEL_HISTORY, WHEEL_LABEL_MAX, WHEEL_MAX_OPTIONS } from '../lib/wheel';
 import type {
   ChecklistItem,
   Couple,
+  CourtAppeal,
   CourtCase,
   DelayedMessage,
   Json,
@@ -22,6 +27,8 @@ import type {
   PendingQuestion,
   Plan,
   Profile,
+  WheelOption,
+  WheelSpin,
 } from '../types/database.types';
 import { demoVerdict } from './judge';
 
@@ -35,6 +42,7 @@ const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CATEGORIES = ['CHORES', 'PLANS', 'COMMUNICATION', 'MONEY', 'FAMILY', 'OTHER'];
 const TIMEOUT_PLEA = 'Davalı süre aşımı sebebiyle savunma yapmaktan imtina etmiştir.';
+const TIMEOUT_REPLY = 'Karşı taraf 12 saatlik süre içinde itiraza cevap vermemiştir.';
 
 /** Simulated partner reaction delays (real seconds, not time-scaled). */
 export const PARTNER_DELAYS = {
@@ -44,7 +52,16 @@ export const PARTNER_DELAYS = {
   answer: 6_000,
 } as const;
 
-export type DemoTable = 'couples' | 'court_cases' | 'delayed_messages' | 'pending_questions' | 'plans' | 'profiles';
+export type DemoTable =
+  | 'couples'
+  | 'court_cases'
+  | 'court_appeals'
+  | 'delayed_messages'
+  | 'pending_questions'
+  | 'plans'
+  | 'profiles'
+  | 'wheel_options'
+  | 'wheel_spins';
 type Channel = DemoTable | 'auth' | 'settings';
 
 export interface DemoSettings {
@@ -56,7 +73,13 @@ export interface DemoSettings {
   latencyMs: number;
 }
 
-type ActionType = 'PARTNER_JOINS' | 'PARTNER_DEFENDS' | 'JUDGE_FINISH' | 'PARTNER_ANSWERS';
+type ActionType =
+  | 'PARTNER_JOINS'
+  | 'PARTNER_DEFENDS'
+  | 'JUDGE_FINISH'
+  | 'PARTNER_ANSWERS'
+  | 'PARTNER_REPLIES_APPEAL'
+  | 'APPEAL_JUDGE_FINISH';
 interface ScheduledAction {
   id: string;
   at: number;
@@ -70,9 +93,12 @@ interface DemoState {
   profiles: Profile[];
   couple: Couple | null;
   cases: CourtCase[];
+  appeals: CourtAppeal[];
   messages: DelayedMessage[];
   questions: PendingQuestion[];
   plans: Plan[];
+  wheelOptions: WheelOption[];
+  wheelSpins: WheelSpin[];
   scheduled: ScheduledAction[];
   settings: DemoSettings;
 }
@@ -88,6 +114,8 @@ export interface DemoDeps {
   uuid: () => string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** [0, 1) — the wheel draw; injectable so tests can pin the result. */
+  random?: () => number;
 }
 
 const DEFAULT_SETTINGS: DemoSettings = { timeScale: 60, offline: false, latencyMs: 250 };
@@ -98,9 +126,12 @@ const freshState = (): DemoState => ({
   profiles: [],
   couple: null,
   cases: [],
+  appeals: [],
   messages: [],
   questions: [],
   plans: [],
+  wheelOptions: [],
+  wheelSpins: [],
   scheduled: [],
   settings: { ...DEFAULT_SETTINGS },
 });
@@ -113,6 +144,7 @@ const checkViolation = (what: string) => new Error(`new row violates check const
 export function createDemoBackend(deps: DemoDeps) {
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const random = deps.random ?? Math.random;
   const iso = (t = now()) => new Date(t).toISOString();
 
   let state = freshState();
@@ -295,12 +327,22 @@ export function createDemoBackend(deps: DemoDeps) {
       created_at: iso(t - 2_400_000),
     });
 
+    ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun'].forEach((label, i) => {
+      state.wheelOptions.push({
+        id: deps.uuid(),
+        couple_id: couple.id,
+        created_by: i % 2 ? uid : partner,
+        label,
+        created_at: iso(t - 3_600_000 + i),
+      });
+    });
+
     const pSide = couple.user_a_id === partner ? 'a' : 'b';
     couple[`user_${pSide}_battery`] = 64;
     couple[`user_${pSide}_status`] = 'NORMAL';
     couple[`user_${pSide}_seen_at`] = iso(t - 180_000);
 
-    touch('plans', 'court_cases', 'pending_questions', 'delayed_messages', 'couples');
+    touch('plans', 'court_cases', 'pending_questions', 'delayed_messages', 'couples', 'wheel_options');
   }
 
   function baseCase(
@@ -384,6 +426,93 @@ export function createDemoBackend(deps: DemoDeps) {
     touch('court_cases');
   }
 
+  // ---------------------------------------------------------------------------
+  // appeals (mirrors file_appeal / claim_appeal_for_verdict / complete_appeal_verdict)
+  // ---------------------------------------------------------------------------
+  function caseRounds(caseId: string) {
+    return state.appeals.filter((a) => a.case_id === caseId).sort((a, b) => a.round - b.round);
+  }
+
+  function openAppeal(c: CourtCase, appellant: string, reason: string): CourtAppeal {
+    if (c.status === 'APPEALED') throw new AppError('APPEAL_PENDING', 'APPEAL_PENDING');
+    if (c.status !== 'JUDGED') throw new AppError('APPEAL_NOT_ALLOWED', 'APPEAL_NOT_ALLOWED');
+    const rounds = caseRounds(c.id);
+    if (rounds.length >= MAX_APPEALS) throw new AppError('APPEAL_LIMIT_REACHED', 'APPEAL_LIMIT_REACHED');
+    const lastVerdictAt = rounds.at(-1)?.judged_at ?? c.judged_at;
+    if (!lastVerdictAt || now() > new Date(lastVerdictAt).getTime() + scaledMs(12 * 60)) {
+      throw new AppError('APPEAL_WINDOW_CLOSED', 'APPEAL_WINDOW_CLOSED');
+    }
+    const text = (reason ?? '').trim();
+    if (text.length < APPEAL_REASON_MIN || text.length > APPEAL_TEXT_MAX) {
+      throw checkViolation('court_appeals_appellant_reason_check');
+    }
+    const a: CourtAppeal = {
+      id: deps.uuid(),
+      case_id: c.id,
+      couple_id: c.couple_id,
+      round: rounds.length + 1,
+      appellant_id: appellant,
+      respondent_id: appellant === c.prosecutor_id ? c.defendant_id : c.prosecutor_id,
+      appellant_reason: text,
+      respondent_reply: null,
+      reply_timed_out: false,
+      reply_deadline: iso(now() + scaledMs(12 * 60)),
+      replied_at: null,
+      status: 'AWAITING_REPLY',
+      verdict_judge: null,
+      verdict_comedian: null,
+      penalty: null,
+      fault_ratio_prosecutor: null,
+      fault_ratio_defendant: null,
+      deliberation_started_at: null,
+      verdict_attempts: 0,
+      last_error: null,
+      created_at: iso(),
+      judged_at: null,
+    };
+    state.appeals.push(a);
+    c.status = 'APPEALED';
+    touch('court_appeals', 'court_cases');
+    return a;
+  }
+
+  function claimAppeal(a: CourtAppeal): boolean {
+    if (a.status !== 'AWAITING_REPLY' || a.verdict_attempts >= 5) return false;
+    if (a.respondent_reply === null) {
+      if (now() < new Date(a.reply_deadline).getTime()) return false; // reply lock
+      a.respondent_reply = TIMEOUT_REPLY;
+      a.reply_timed_out = true;
+    }
+    a.status = 'DELIBERATING';
+    a.deliberation_started_at = iso();
+    a.verdict_attempts += 1;
+    a.last_error = null;
+    schedule('APPEAL_JUDGE_FINISH', PARTNER_DELAYS.judge, a.id);
+    touch('court_appeals');
+    return true;
+  }
+
+  function finishAppeal(a: CourtAppeal) {
+    const c = state.cases.find((x) => x.id === a.case_id);
+    if (!c || a.status !== 'DELIBERATING' || a.respondent_reply === null || c.defendant_plea === null) return;
+    Object.assign(
+      a,
+      demoVerdict({
+        title: `${c.title} · ${a.round}. istinaf`,
+        category: c.category,
+        prosecutor_plea: `${c.prosecutor_plea}\n${a.appellant_reason}`,
+        defendant_plea: `${c.defendant_plea}\n${a.respondent_reply}`,
+        defense_timed_out: a.reply_timed_out,
+        prosecutorName: nameOf(c.prosecutor_id),
+        defendantName: nameOf(c.defendant_id),
+      }),
+    );
+    a.status = 'JUDGED';
+    a.judged_at = iso();
+    c.status = 'JUDGED';
+    touch('court_appeals', 'court_cases');
+  }
+
   const PARTNER_DEFENSES: Record<string, string> = {
     CHORES: 'Bu hafta iki kez çöpü ben çıkardım, kimse alkışlamadı. Adalet istiyorum.',
     PLANS: 'Geç kaldım çünkü sana sürpriz tatlı almak için yol değiştirdim. Sürprizi bozduğun için teşekkürler.',
@@ -392,6 +521,49 @@ export function createDemoBackend(deps: DemoDeps) {
     FAMILY: 'Annemi aramadım çünkü o beni aradı ve ben açtım. Teknik olarak iletişim kuruldu.',
     OTHER: 'Suçlamaları kabul etmiyorum, ama bir sonraki filmi sen seçebilirsin.',
   };
+
+  // ---------------------------------------------------------------------------
+  // unpair (mirrors leave_couple: the couple and every shared row are deleted)
+  // ---------------------------------------------------------------------------
+  function endCouple(couple: Couple) {
+    const other = <T extends { couple_id: string }>(rows: T[]) => rows.filter((r) => r.couple_id !== couple.id);
+    state.cases = other(state.cases);
+    state.appeals = other(state.appeals);
+    state.messages = other(state.messages);
+    state.questions = other(state.questions);
+    state.plans = other(state.plans);
+    state.wheelOptions = other(state.wheelOptions);
+    state.wheelSpins = other(state.wheelSpins);
+    state.couple = null;
+    touch('couples', 'court_cases', 'court_appeals', 'delayed_messages', 'pending_questions', 'plans', 'wheel_options', 'wheel_spins');
+  }
+
+  // ---------------------------------------------------------------------------
+  // decision wheel (mirrors spin_wheel)
+  // ---------------------------------------------------------------------------
+  function drawSpin(couple: Couple, spunBy: string): WheelSpin {
+    const t = now();
+    if (state.wheelSpins.some((s) => s.couple_id === couple.id && t - new Date(s.created_at).getTime() < WHEEL_COOLDOWN_MS)) {
+      throw new AppError('SPIN_COOLDOWN', 'SPIN_COOLDOWN');
+    }
+    const labels = state.wheelOptions.filter((o) => o.couple_id === couple.id).map((o) => o.label);
+    if (labels.length < 2) throw new AppError('NOT_ENOUGH_OPTIONS', 'NOT_ENOUGH_OPTIONS');
+    const index = Math.min(labels.length - 1, Math.floor(random() * labels.length));
+    const spin: WheelSpin = {
+      id: deps.uuid(),
+      couple_id: couple.id,
+      spun_by: spunBy,
+      option_labels: labels,
+      result_index: index,
+      result_label: labels[index]!,
+      created_at: iso(t),
+    };
+    const others = state.wheelSpins.filter((s) => s.couple_id !== couple.id);
+    const mine = [spin, ...state.wheelSpins.filter((s) => s.couple_id === couple.id)].slice(0, WHEEL_HISTORY);
+    state.wheelSpins = [...mine, ...others];
+    touch('wheel_spins');
+    return spin;
+  }
 
   // ---------------------------------------------------------------------------
   // background tick: scheduled partner actions, message release, 24h sweep
@@ -417,6 +589,11 @@ export function createDemoBackend(deps: DemoDeps) {
     for (const c of state.cases) {
       if (c.status === 'AWAITING_DEFENSE' && c.defendant_plea === null && new Date(c.defense_deadline).getTime() <= t) {
         claim(c); // 24h sweep
+      }
+    }
+    for (const a of state.appeals) {
+      if (a.status === 'AWAITING_REPLY' && a.respondent_reply === null && new Date(a.reply_deadline).getTime() <= t) {
+        claimAppeal(a); // 12h reply timeout, picked up by the same sweep
       }
     }
     await flush();
@@ -447,6 +624,21 @@ export function createDemoBackend(deps: DemoDeps) {
       case 'JUDGE_FINISH': {
         const c = state.cases.find((x) => x.id === a.ref);
         if (c) finishJudgement(c);
+        break;
+      }
+      case 'PARTNER_REPLIES_APPEAL': {
+        const ap = state.appeals.find((x) => x.id === a.ref);
+        if (ap && ap.status === 'AWAITING_REPLY' && ap.respondent_reply === null && now() < new Date(ap.reply_deadline).getTime()) {
+          ap.respondent_reply = 'Karar yerindeydi; itiraz sadece vakit kazanma çabası. Heyetin takdirine bırakıyorum.';
+          ap.replied_at = iso();
+          touch('court_appeals');
+          claimAppeal(ap); // the DB webhook fires right after a reply
+        }
+        break;
+      }
+      case 'APPEAL_JUDGE_FINISH': {
+        const ap = state.appeals.find((x) => x.id === a.ref);
+        if (ap) finishAppeal(ap);
         break;
       }
       case 'PARTNER_ANSWERS': {
@@ -664,6 +856,48 @@ export function createDemoBackend(deps: DemoDeps) {
         return c && claim(c) ? 'judged' : 'already_handled';
       });
     },
+    async listAppeals(coupleId: string): Promise<CourtAppeal[]> {
+      return op(() => {
+        activeCouple();
+        return state.appeals
+          .filter((a) => a.couple_id === coupleId)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      });
+    },
+    async fileAppeal(caseId: string, reason: string): Promise<CourtAppeal> {
+      return op(() => {
+        const couple = activeCouple();
+        const c = state.cases.find((x) => x.id === caseId && x.couple_id === couple.id);
+        if (!c) throw new AppError('CASE_NOT_FOUND', 'CASE_NOT_FOUND');
+        const a = openAppeal(c, me(), reason);
+        schedule('PARTNER_REPLIES_APPEAL', PARTNER_DELAYS.defend, a.id);
+        return a;
+      });
+    },
+    async replyAppeal(appealId: string, reply: string): Promise<CourtAppeal> {
+      return op(() => {
+        const couple = activeCouple();
+        const a = state.appeals.find((x) => x.id === appealId && x.couple_id === couple.id);
+        if (!a) throw new AppError('APPEAL_NOT_FOUND', 'APPEAL_NOT_FOUND');
+        if (a.respondent_id !== me()) throw new AppError('NOT_RESPONDENT', 'NOT_RESPONDENT');
+        if (a.status !== 'AWAITING_REPLY' || a.respondent_reply !== null) throw new AppError('REPLY_CLOSED', 'REPLY_CLOSED');
+        if (now() >= new Date(a.reply_deadline).getTime()) {
+          throw new AppError('REPLY_DEADLINE_PASSED', 'REPLY_DEADLINE_PASSED');
+        }
+        if (len(reply) < 1 || len(reply) > APPEAL_TEXT_MAX) throw checkViolation('court_appeals_respondent_reply_check');
+        a.respondent_reply = reply.trim();
+        a.replied_at = iso();
+        touch('court_appeals');
+        claimAppeal(a); // webhook equivalent
+        return a;
+      });
+    },
+    async requestAppealVerdict(appealId: string): Promise<'judged' | 'already_handled'> {
+      return op(() => {
+        const a = state.appeals.find((x) => x.id === appealId);
+        return a && claimAppeal(a) ? 'judged' : 'already_handled';
+      });
+    },
 
     // ---- plans ----
     async listPlans(coupleId: string): Promise<Plan[]> {
@@ -763,6 +997,57 @@ export function createDemoBackend(deps: DemoDeps) {
         touch('plans');
         return p;
       });
+    },
+
+    async leaveCouple(): Promise<void> {
+      return op(() => endCouple(activeCouple()));
+    },
+
+    // ---- decision wheel ----
+    async listWheelOptions(coupleId: string): Promise<WheelOption[]> {
+      return op(() => {
+        activeCouple();
+        return state.wheelOptions.filter((o) => o.couple_id === coupleId);
+      });
+    },
+    async listWheelSpins(coupleId: string, limit: number): Promise<WheelSpin[]> {
+      return op(() => {
+        activeCouple();
+        return state.wheelSpins.filter((s) => s.couple_id === coupleId).slice(0, limit);
+      });
+    },
+    async addWheelOption(label: string): Promise<WheelOption> {
+      return op(() => {
+        const couple = activeCouple();
+        const text = (label ?? '').trim();
+        if (text.length < 1 || text.length > WHEEL_LABEL_MAX) {
+          throw new AppError('INVALID_OPTION_LABEL', 'INVALID_OPTION_LABEL');
+        }
+        const mine = state.wheelOptions.filter((o) => o.couple_id === couple.id);
+        if (mine.some((o) => o.label.toLowerCase() === text.toLowerCase())) {
+          throw new AppError('DUPLICATE_OPTION', 'DUPLICATE_OPTION');
+        }
+        if (mine.length >= WHEEL_MAX_OPTIONS) throw new AppError('WHEEL_FULL', 'WHEEL_FULL');
+        const o: WheelOption = { id: deps.uuid(), couple_id: couple.id, created_by: me(), label: text, created_at: iso() };
+        state.wheelOptions.push(o);
+        touch('wheel_options');
+        return o;
+      });
+    },
+    async removeWheelOption(optionId: string): Promise<void> {
+      return op(() => {
+        const c = state.couple;
+        const uid = state.session?.userId;
+        const idx = state.wheelOptions.findIndex(
+          (o) => o.id === optionId && c?.is_active && o.couple_id === c.id && (c.user_a_id === uid || c.user_b_id === uid),
+        );
+        if (idx < 0) throw new AppError('OPTION_NOT_FOUND', 'OPTION_NOT_FOUND');
+        state.wheelOptions.splice(idx, 1);
+        touch('wheel_options');
+      });
+    },
+    async spinWheel(): Promise<WheelSpin> {
+      return op(() => drawSpin(activeCouple(), me()));
     },
 
     // ---- cooling-off room ----
@@ -988,6 +1273,31 @@ export function createDemoBackend(deps: DemoDeps) {
         touch('plans');
         return true;
       }),
+    /** Partner appeals the newest verdict still inside its window; you get to reply. */
+    partnerAppeals: () =>
+      local(() => {
+        const uid = me();
+        const couple = activeCouple();
+        const partner = partnerOf(couple, uid);
+        const judged = state.cases
+          .filter((c) => c.couple_id === couple.id && c.status === 'JUDGED')
+          .sort((a, b) => (b.judged_at ?? '').localeCompare(a.judged_at ?? ''));
+        const c = judged.find((x) => {
+          const rounds = caseRounds(x.id);
+          const last = rounds.at(-1)?.judged_at ?? x.judged_at;
+          return rounds.length < MAX_APPEALS && !!last && now() <= new Date(last).getTime() + scaledMs(12 * 60);
+        });
+        if (!c) throw new AppError('APPEAL_WINDOW_CLOSED', 'APPEAL_WINDOW_CLOSED');
+        return openAppeal(c, partner, 'Bu karar eksik inceleme sonucu verilmiş; benim tarafımı da dinleyin lütfen.').case_id;
+      }),
+    /** Partner ends the couple: you land on the pairing screen with nothing left behind. */
+    partnerLeaves: () => local(() => endCouple(activeCouple())),
+    /** Partner spins: the open wheel screen must animate to the same result. */
+    partnerSpinsWheel: () =>
+      local(() => {
+        const couple = activeCouple();
+        return drawSpin(couple, partnerOf(couple, me())).result_label;
+      }),
     setPartnerPresence: (battery: number | null, status: PartnerStatus) =>
       local(() => {
         const uid = me();
@@ -1002,7 +1312,19 @@ export function createDemoBackend(deps: DemoDeps) {
       await ready;
       state = freshState();
       await deps.storage.removeItem(STORAGE_KEY);
-      for (const ch of ['auth', 'settings', 'couples', 'court_cases', 'delayed_messages', 'pending_questions', 'plans', 'profiles'] as Channel[]) {
+      for (const ch of [
+        'auth',
+        'settings',
+        'couples',
+        'court_cases',
+        'court_appeals',
+        'delayed_messages',
+        'pending_questions',
+        'plans',
+        'profiles',
+        'wheel_options',
+        'wheel_spins',
+      ] as Channel[]) {
         listeners.get(ch)?.forEach((fn) => fn());
       }
     },

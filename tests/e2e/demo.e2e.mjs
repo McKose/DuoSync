@@ -164,6 +164,29 @@ await step('plan detail: toggle checklist + add item', async () => {
   await back();
 });
 
+await step('decision wheel: my spin, then partner spin, both land on stored results', async () => {
+  await click('Ne yesek?');
+  await waitText('Seçenekler');
+  await waitText('Lahmacun');
+  await type('Yeni seçenek', 'Pide');
+  await click('Ekle');
+  await waitText('6/12');
+  await click('Çevir 🎡');
+  await waitText('Sen çevirdin…');
+  await shot('wheel-spinning');
+  await waitText('🎉 Karar:', 10000);
+  await shot('wheel-result');
+  await sleep(10500); // server-side cooldown between spins
+  await click('Kontrol paneli');
+  await click('Deniz çarkı çevirsin');
+  await back();
+  await waitText('Deniz çevirdi', 10000);
+  await waitText('🎉 Karar:', 10000);
+  await waitText('Önceki kararlar');
+  await shot('wheel-partner-result');
+  await back();
+});
+
 await step('court: defend seeded case → verdict', async () => {
   await click('Mahkeme');
   await waitText('Telefonun sürekli sessizde kalması');
@@ -187,6 +210,21 @@ await step('court: file a case → partner defends → judged', async () => {
   await waitText('Kumanda yine kayıp');
   await waitText('Ağır Ceza Hâkimi', 20000);
   await shot('verdict-2');
+  await back();
+});
+
+await step('appeal: I appeal the fresh verdict → partner replies → 1st appeal verdict counts', async () => {
+  await click('Kumanda yine kayıp');
+  await waitText('İlk derece kararı');
+  await click('İtiraz et');
+  await type('İtiraz gerekçen', 'Kumandayı en son o kullandı, delil yetersiz.');
+  await click('İtirazı gönder');
+  await waitText('1. istinaf');
+  await shot('appeal-filed');
+  await waitText('1. istinaf kararı', 25000); // Deniz replies (~8 s), panel decides (~2.5 s)
+  await waitText('Geçerli karar');
+  await waitText('Önceki karar');
+  await shot('appeal-judged');
   await back();
 });
 
@@ -234,6 +272,18 @@ await step('offline simulation shows banner', async () => {
   await waitText('Çevrimdışısın');
   await shot('offline');
   await page.click('[aria-label="Çevrimdışı simülasyonu"]');
+});
+
+await step('leave couple: confirm → shared data gone, back to pairing', async () => {
+  await back();
+  await click('Masa');
+  await click('Eşleşmeyi sonlandır');
+  await waitText('kalıcı olarak silinir'); // in-app confirm modal
+  await shot('leave-confirm');
+  await click('Evet, sil');
+  await waitText('Partnerini bağla', 15000);
+  await shot('after-leave');
+  if (await hasText('Cuma akşamı yemek')) throw new Error('old couple data still rendered after leaving');
 });
 
 console.log(results.join('\n'));

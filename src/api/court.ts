@@ -1,6 +1,6 @@
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { unwrap } from '@/lib/errors';
-import type { CaseCategory, CourtCase } from '@/types/database.types';
+import type { CaseCategory, CourtAppeal, CourtCase } from '@/types/database.types';
 import { supabase } from './supabase';
 import { demo, IS_DEMO } from '@/demo';
 
@@ -41,6 +41,29 @@ export async function submitDefense(caseId: string, plea: string): Promise<Court
   return unwrap(await supabase.rpc('submit_defense', { p_case_id: caseId, p_plea: plea.trim() }));
 }
 
+/** All appeal rounds of the couple's cases, oldest first. */
+export async function listAppeals(coupleId: string): Promise<CourtAppeal[]> {
+  if (IS_DEMO) return demo.listAppeals(coupleId);
+  return unwrap(
+    await supabase
+      .from('court_appeals')
+      .select('*')
+      .eq('couple_id', coupleId)
+      .order('created_at', { ascending: true })
+      .limit(300),
+  );
+}
+
+export async function fileAppeal(caseId: string, reason: string): Promise<CourtAppeal> {
+  if (IS_DEMO) return demo.fileAppeal(caseId, reason);
+  return unwrap(await supabase.rpc('file_appeal', { p_case_id: caseId, p_reason: reason.trim() }));
+}
+
+export async function replyAppeal(appealId: string, reply: string): Promise<CourtAppeal> {
+  if (IS_DEMO) return demo.replyAppeal(appealId, reply);
+  return unwrap(await supabase.rpc('reply_appeal', { p_appeal_id: appealId, p_reply: reply.trim() }));
+}
+
 export type VerdictRequestResult = 'judged' | 'already_handled' | 'failed';
 
 /**
@@ -51,9 +74,17 @@ export type VerdictRequestResult = 'judged' | 'already_handled' | 'failed';
  */
 export async function requestVerdict(caseId: string): Promise<VerdictRequestResult> {
   if (IS_DEMO) return demo.requestVerdict(caseId);
-  const { error } = await supabase.functions.invoke('ai-court-verdict', {
-    body: { case_id: caseId },
-  });
+  return invokeVerdict({ case_id: caseId });
+}
+
+/** Same fallback for an appeal round, after the respondent replied. */
+export async function requestAppealVerdict(appealId: string): Promise<VerdictRequestResult> {
+  if (IS_DEMO) return demo.requestAppealVerdict(appealId);
+  return invokeVerdict({ appeal_id: appealId });
+}
+
+async function invokeVerdict(body: { case_id: string } | { appeal_id: string }): Promise<VerdictRequestResult> {
+  const { error } = await supabase.functions.invoke('ai-court-verdict', { body });
   if (!error) return 'judged';
   if (error instanceof FunctionsHttpError) {
     const status = (error.context as Response | undefined)?.status;
