@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-11-08 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; next: A4 needs two physical Android phones).
+Last updated: 2026-11-08 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; B4 done in code; next: A4 needs two physical Android phones).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -21,6 +21,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-11-03 | **Correction:** the user confirmed DuoSync's Supabase project is `ndxpbbvfgupxlgoqoesh`; `gfjkepyaubdstinqgtqw` (row of 2026-10-31) is not DuoSync. Added `.mcp.json` (Supabase MCP scoped to `ndxpbbvfgupxlgoqoesh`) for local Claude Code. Cloud sessions: `mcp.supabase.com` is blocked by the environment's network policy (proxy 403), so A1 from the cloud needs the claude.ai Supabase connector pointed at this project | nothing deployed yet |
 | 2026-11-03..04 | **A1 on `ndxpbbvfgupxlgoqoesh`** via the claude.ai Supabase connector (ref checked before every call). All 5 migrations applied; MCP records apply timestamps as versions → aligned to the file names (repair-equivalent). Live schema compared with the PGlite build by per-category md5 fingerprints (functions, policies, columns, constraints, indexes, triggers, table/column/function grants, RLS, enums, publication, cron jobs): identical; only extra object is Supabase's own `public.rls_auto_enable()` (automatic-RLS event trigger). Found + fixed: `live_check` row 13 flagged that function → event-trigger fns only need *a* pinned path; functions read the server key via `serviceKey()` (`SUPABASE_SECRET_KEYS.default`, legacy `SUPABASE_SERVICE_ROLE_KEY` fallback). Both functions deployed (ACTIVE, `verify_jwt=false`). Vault: `duosync_project_url` + `duosync_internal_secret` (64 hex, generated in-DB, never selected). User then entered `INTERNAL_WEBHOOK_SECRET` (= Vault value) and `GEMINI_API_KEY` in the dashboard (the connector's secret prompt would not open). Before that every sweep got 500 (`Missing required env var GEMINI_API_KEY` at boot); after it a manual sweep got 202 and `sweep results []`, proving key + secret + service key end to end | test:db 65/65, test:functions 9/9; **live_check 14/14 at 18:15 UTC**, both functions ACTIVE |
 | 2026-11-04..08 | **A2** advisors on the live project: 0 ERROR, all WARNs justified (RLS-helper RPC exposure pinned by a new PGlite test). CI flake found and fixed: wheel tests assumed insertion order, but PGlite's clock has ms resolution (reproduced by forcing the tie). **A3**: full chain verified live with two `*.invalid` test users; `gemini-3.8-flash` returned 503 "high demand" for 14 h, so the 5-claim cap killed the test case after ≈ 39 min (risk recorded; user kept the retry policy, backlog item added). User chose Flash-Lite → default `gemini-3.5-flash-lite`, first call judged in ≈ 3 s, injection not obeyed. Test data removed via `leave_couple()` (B2 ran live) + user deletion | test:db 66/66, test:functions 9/9; live project empty again |
+| 2026-11-08 | **B4** encrypted storage at zero cost (user): AES-256-GCM from `expo-crypto` (already installed), key in `expo-secure-store` (Expo SDK). Applied to the Supabase session **and** the persisted query cache (pleas, verdicts, messages). Fail closed on tamper / lost key, entry name bound as AAD, single-flight key creation, legacy plaintext migrated on read. New `test:unit` suite (CI step added) | test:unit 13/13 (2 mutations caught), E2E 14/14; on-device check pending (A4/A5) |
 
 ## 2. Current state
 
@@ -36,6 +37,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | İstinaf (C3) | ✅ code + tests (server, function, demo, E2E), ❌ never hit live Gemini |
 | Eşleşme bozma (B2) | ✅ code + tests; ✅ `leave_couple()` ran live once (A3 cleanup, 2026-11-08); ❌ not yet on phones (A5); rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
+| Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore), ❌ not yet on a phone (A4/A5) |
 | Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 5 migrations, 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
 | Physical device run | ❌ never |
 
@@ -142,6 +144,7 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   | Cooling-off due | delivered ≤ 60 s late, push sent |
   | Checklist concurrent edits on 2 phones, one offline | both items survive, no loss |
   | Battery | update only on foreground; none while backgrounded |
+  | Encrypted storage (B4): sign in, force-stop, reopen | still signed in, cache restored; `adb` dump of AsyncStorage shows only `enc1:` values |
   | Third user | sees nothing, cannot write |
   | Decision wheel: A spins while B has the screen open | B animates to the same segment and label; B's spin within 10 s → `SPIN_COOLDOWN` |
   | Unpair: A leaves while B has the app open | B lands on the pairing screen, gets `COUPLE_ENDED` push; B's WS frames: record which `delayed_messages` DELETE events arrive (see B2 caveat) |
@@ -173,8 +176,21 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 - [ ] **B3. KVKK notice + explicit consent screen** (1 d + legal) — *deferred (personal use)* — pleas are sent to Google
   (cross-border transfer, KVKK art. 9). Block court usage until consent recorded per user.
   Legal text must come from the user/lawyer; Claude provides the mechanism only.
-- [ ] **B4. Encrypted session storage** (0.5 d) — AES key in SecureStore, encrypted AsyncStorage
+- [x] **B4. Encrypted session storage** (0.5 d) — done 2026-11-08 in code; on-device check in A4/A5. AES key in SecureStore, encrypted AsyncStorage
   adapter for the Supabase client (SecureStore alone hits 2 KB limit).
+  *Delivered (user: zero cost):* no paid service, no new crypto library — AES-256-GCM from `expo-crypto` (already a
+  dependency), key in `expo-secure-store` (Expo SDK, free; Android Keystore, `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`,
+  its config plugin keeps it out of Android auto-backup). `src/lib/encryptedStorage.ts` (pure, dependency-injected)
+  + `src/lib/secureStorage.ts` (RN binding). Stored as `enc1:` + base64(iv ‖ ciphertext ‖ tag); the entry name is
+  the GCM AAD, so a value copied under another name does not decrypt; one key per install, created single-flight.
+  Unreadable value (tampering, or AsyncStorage restored without the keystore key) → deleted, `null` → sign in again;
+  never a plaintext fallback, and a keystore failure makes the write fail. Legacy plaintext values are encrypted in place on
+  first read. **Also applied to the persisted query cache** (`duosync-query-cache`: pleas, verdicts, delivered
+  messages, answers — the same rooted-device threat as the token). Web (demo/E2E only) stays plain AsyncStorage:
+  without a keystore the key would sit next to the ciphertext. Tests: `tests/unit/encryptedStorage.test.ts` 13/13
+  with real AES-GCM (Node WebCrypto); mutation-checked (drop the AAD → 2 fail; drop single-flight → 1 fails).
+  E2E 14/14 on the web export. Not yet verified on a phone (needs A4): add to A5 → after login, force-stop and
+  reopen → still signed in; AsyncStorage holds only `enc1:` values.
 
 ### Phase C — Missing modules
 

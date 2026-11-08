@@ -1,10 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { focusManager, onlineManager, QueryClient } from '@tanstack/react-query';
 import { AppState, Platform } from 'react-native';
 import { demo, IS_DEMO } from '@/demo';
 import { isNetworkError } from '@/lib/errors';
+import { secureStorage } from '@/lib/secureStorage';
 import type { ChecklistItem, Plan } from '@/types/database.types';
 import { mk } from './keys';
 import { upsertChecklistItem } from './plans';
@@ -62,8 +62,10 @@ queryClient.setMutationDefaults(mk.checklistUpsert, {
   mutationFn: ({ planId, item }: ChecklistMutationVars): Promise<Plan> => upsertChecklistItem(planId, item),
 });
 
+// The cache holds pleas, verdicts, delivered messages and answers: encrypted
+// at rest like the session (B4). An unreadable cache is dropped and refetched.
 export const persister = createAsyncStoragePersister({
-  storage: AsyncStorage,
+  storage: secureStorage,
   key: 'duosync-query-cache',
   throttleTime: 1000,
 });

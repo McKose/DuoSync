@@ -189,7 +189,7 @@ Client (Expo)                         Supabase
 |---|---|---|
 | NativeWind 4.2 + Reanimated 4 + RN 0.86 | Bundle derleniyor, ancak cihazda çalışma doğrulanmadı | İlk dev build'de tüm ekranları gez; sorun olursa NativeWind 5 RC veya StyleSheet |
 | Soğuma odası gecikmesi | pg_cron 1 dk çözünürlük → mesaj en geç ~60 sn geç düşer | Kabul edilebilir; daha sıkı gerekiyorsa Supabase Queues |
-| AsyncStorage'da oturum | Root'lu cihazda token okunabilir | SecureStore 2 KB limitine takılır; gerekirse AES anahtarı SecureStore'da + şifreli AsyncStorage deseni |
+| Cihazda oturum ve önbellek | Root'lu cihazda token, dilekçe, karar ve mesajlar okunabilirdi | **Giderildi (B4):** oturum ve kalıcı sorgu önbelleği AsyncStorage'da AES-256-GCM ile şifreli; anahtar SecureStore'da (Android Keystore), yedeğe/yeni cihaza taşınmaz; kayıt adı AAD ile bağlı. Çözülemeyen kayıt silinir → yeniden giriş. `expo-crypto` + `expo-secure-store` (Expo SDK, ücretsiz). Web (yalnız demo/E2E) şifresiz kalır: orada anahtarı koruyacak keystore yok |
 | Pil verisi tazeliği | Partner uygulamayı açmazsa veri bayatlar | UI "son görülme" gösterir, 6 saatten eski veriyi soluk çizer |
 | Tek cihaz / kullanıcı | `push_tokens` PK = `user_id` | Çoklu cihaz gerekirse PK'yı `(user_id, token)` yap |
 | LLM maliyeti | Kötüye kullanım | Davacı başına 24 saatte 5 dava; dava başına en çok 2 istinaf; claim başına en çok 2 çağrı, dava/tur başına toplam 5 deneme |

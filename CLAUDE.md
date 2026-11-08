@@ -38,7 +38,9 @@ pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite`
 | `src/types/database.types.ts` | Hand-maintained in generator shape; regenerate after schema change |
 | `src/lib/wheel.ts` | Wheel limits shared with the server + pure landing geometry (both phones stop on the same spot) |
 | `src/lib/appeals.ts` | Appeal limits + `appealView()`: rounds, can-appeal, which verdict counts |
+| `src/lib/encryptedStorage.ts` · `secureStorage.ts` | B4: AES-256-GCM storage adapter (pure, DI) · RN binding (`expo-crypto` + key in `expo-secure-store`); used by the Supabase session and the persisted query cache |
 | `tests/demo/engine.test.ts` | 31 demo contract tests |
+| `tests/unit/encryptedStorage.test.ts` | 13 tests: real AES-GCM via Node WebCrypto, tamper / lost key / AAD / single-flight / legacy migration / UTF-8 |
 | `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (14 steps) |
 | `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e) · demo APK build (push to `apk-build` branch) |
 
@@ -102,6 +104,7 @@ npm run lint && npm run typecheck
 npm run test:db          # + new test for every RLS/RPC rule
 npm run test:functions   # runs inside supabase/functions (own deno.json)
 npm run test:demo
+npm run test:unit        # tests/unit (pure client modules)
 # UI change → run tests/e2e/demo.e2e.mjs (see file header); also runs in CI
 ```
 Then update the status table in `docs/ROADMAP.md`.
