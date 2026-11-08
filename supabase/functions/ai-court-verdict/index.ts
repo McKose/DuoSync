@@ -31,6 +31,18 @@ import {
   type CaseForJudgement,
   type PriorVerdict,
 } from '../_shared/verdict.ts';
+import {
+  alertMessage,
+  budgetLevel,
+  crossedLevel,
+  NO_USAGE,
+  parseUsage,
+  readLimits,
+  totalsBefore,
+  type CallOutcome,
+  type TokenUsage,
+  type Totals,
+} from '../_shared/usage.ts';
 
 const SUPABASE_URL = requireEnv('SUPABASE_URL');
 const SERVICE_ROLE_KEY = serviceKey();
@@ -42,6 +54,10 @@ const GEMINI_API_KEY = requireEnv('GEMINI_API_KEY');
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
 // Override only for local/integration testing against a stub server.
 const GEMINI_BASE_URL = Deno.env.get('GEMINI_BASE_URL') ?? 'https://generativelanguage.googleapis.com';
+// Daily budget (D2): GEMINI_DAILY_CALL_LIMIT / GEMINI_DAILY_TOKEN_LIMIT, UTC day.
+const LIMITS = readLimits((n) => Deno.env.get(n));
+// Optional: profile id that gets a push at 80 % and 100 % of the budget.
+const USAGE_ALERT_USER_ID = Deno.env.get('USAGE_ALERT_USER_ID') ?? '';
 
 const GEMINI_TIMEOUT_MS = 45_000;
 const MAX_LLM_ATTEMPTS = 2; // per claim; the cron sweep retries across claims (cap 5)
@@ -85,7 +101,12 @@ async function sweep(): Promise<JudgeOutcome[]> {
       break;
     }
     // sequential: bounded LLM concurrency/cost
-    results.push(await (t.kind === 'case' ? judgeCase(t.id) : judgeAppeal(t.id)));
+    const outcome = await (t.kind === 'case' ? judgeCase(t.id) : judgeAppeal(t.id));
+    results.push(outcome);
+    if (outcome.status === 'deferred') {
+      console.warn('sweep: daily Gemini budget spent; remaining work waits for the next UTC day');
+      break;
+    }
   }
   console.log('sweep results', JSON.stringify(results));
   return results;
@@ -123,6 +144,9 @@ interface Target {
 type JudgeOutcome =
   | ({ status: 'judged'; adjusted: boolean } & Target)
   | ({ status: 'not_claimable' } & Target)
+  // Daily budget spent: not claimed, no attempt used; the sweep picks it up
+  // after UTC midnight.
+  | ({ status: 'deferred' } & Target)
   | ({ status: 'failed'; error: string } & Target);
 
 /** complete_* / fail_* RPCs for each kind; they differ only in name and id parameter. */
@@ -131,11 +155,31 @@ const RPC = {
   appeal: { complete: 'complete_appeal_verdict', fail: 'fail_appeal_verdict', idParam: 'p_appeal_id' },
 } as const;
 
-class RetryableError extends Error {}
+/** A failed Gemini call, classified for retrying and for the usage log. */
+class GeminiError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: CallOutcome,
+    readonly retryable: boolean,
+    readonly httpStatus: number | null,
+    readonly usage: TokenUsage,
+    readonly latencyMs: number,
+  ) {
+    super(message);
+  }
+}
 
-async function callGemini(prompt: string): Promise<string> {
+interface GeminiReply {
+  text: string;
+  usage: TokenUsage;
+  latencyMs: number;
+}
+
+async function callGemini(prompt: string): Promise<GeminiReply> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
+  const started = Date.now();
+  const elapsed = () => Date.now() - started;
   try {
     const res = await fetch(
       `${GEMINI_BASE_URL}/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
@@ -160,19 +204,98 @@ async function callGemini(prompt: string): Promise<string> {
       },
     );
     const body = await res.json().catch(() => null);
+    const usage = parseUsage(body);
     if (!res.ok) {
       const msg = (body as { error?: { message?: string } } | null)?.error?.message ?? res.statusText;
-      if (res.status === 429 || res.status >= 500) throw new RetryableError(`Gemini ${res.status}: ${msg}`);
-      throw new Error(`Gemini ${res.status}: ${msg}`);
+      const retryable = res.status === 429 || res.status >= 500;
+      throw new GeminiError(`Gemini ${res.status}: ${msg}`, 'http_error', retryable, res.status, usage, elapsed());
     }
-    return extractCandidateText(body);
+    try {
+      return { text: extractCandidateText(body), usage, latencyMs: elapsed() };
+    } catch (e) {
+      // Blocked prompt, safety stop, empty candidate: the call was processed.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new GeminiError(msg, 'invalid_output', true, res.status, usage, elapsed());
+    }
   } catch (e) {
+    if (e instanceof GeminiError) throw e;
     if (e instanceof DOMException && e.name === 'AbortError') {
-      throw new RetryableError(`Gemini timeout after ${GEMINI_TIMEOUT_MS} ms`);
+      throw new GeminiError(`Gemini timeout after ${GEMINI_TIMEOUT_MS} ms`, 'timeout', true, null, NO_USAGE, elapsed());
     }
-    throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new GeminiError(`Gemini network error: ${msg}`, 'network_error', true, null, NO_USAGE, elapsed());
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** Today's billable Gemini usage (UTC day), or null when it cannot be read. */
+async function usageToday(): Promise<Totals | null> {
+  const { data, error } = await admin.rpc('llm_usage_today');
+  const row = (data as Array<{ calls_today: number; tokens_today: number }> | null)?.[0];
+  if (error || !row) {
+    console.error(`llm_usage_today failed: ${error?.message ?? 'no row'}`);
+    return null;
+  }
+  return { calls: Number(row.calls_today), tokens: Number(row.tokens_today) };
+}
+
+/**
+ * True when today's budget is spent. Checked before claiming, so a deferred
+ * case or appeal uses no attempt. Fails open (with an error log) when the
+ * usage cannot be read: a broken log must not stop the court.
+ */
+async function budgetSpent(): Promise<boolean> {
+  const t = await usageToday();
+  return t !== null && budgetLevel(t, LIMITS) === 'exhausted';
+}
+
+/** Logs one call; at 80 % / 100 % of the budget, warns in the logs and pushes the owner. */
+async function trackCall(
+  kind: Target['kind'],
+  outcome: CallOutcome,
+  httpStatus: number | null,
+  usage: TokenUsage,
+  latencyMs: number,
+): Promise<void> {
+  try {
+    const { data, error } = await admin.rpc('record_llm_usage', {
+      p_kind: kind,
+      p_model: GEMINI_MODEL,
+      p_outcome: outcome,
+      p_http_status: httpStatus,
+      p_latency_ms: latencyMs,
+      p_prompt_tokens: usage.prompt,
+      p_output_tokens: usage.output,
+      p_thought_tokens: usage.thought,
+      p_total_tokens: usage.total,
+    });
+    const row = (data as Array<{ calls_today: number; tokens_today: number }> | null)?.[0];
+    if (error || !row) throw new Error(error?.message ?? 'no row');
+    const after: Totals = { calls: Number(row.calls_today), tokens: Number(row.tokens_today) };
+    const level = crossedLevel(totalsBefore(after, outcome, usage), after, LIMITS);
+    if (level) await alertOwner(level, after);
+  } catch (e) {
+    // Accounting must never fail a verdict.
+    console.error(`record_llm_usage failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+async function alertOwner(level: 'warn' | 'exhausted', t: Totals): Promise<void> {
+  const line = `Gemini daily budget ${level}: ${t.calls}/${LIMITS.calls} calls, ${t.tokens}/${LIMITS.tokens} tokens`;
+  if (level === 'exhausted') console.error(line);
+  else console.warn(line);
+  if (!UUID_RE.test(USAGE_ALERT_USER_ID)) return;
+  const { title, body } = alertMessage(level, t, LIMITS);
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/send-push-notification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-internal-secret': requireEnv('INTERNAL_WEBHOOK_SECRET') },
+      body: JSON.stringify({ user_id: USAGE_ALERT_USER_ID, type: 'USAGE_ALERT', title, body, data: { level } }),
+    });
+    if (!res.ok) console.error(`usage alert push failed: HTTP ${res.status}`);
+  } catch (e) {
+    console.error(`usage alert push failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -188,8 +311,22 @@ async function deliberate(target: Target, prompt: string): Promise<JudgeOutcome>
 
   for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
     try {
-      const text = await callGemini(prompt);
-      const { verdict, adjusted } = parseVerdict(text);
+      let reply: GeminiReply;
+      try {
+        reply = await callGemini(prompt);
+      } catch (e) {
+        if (e instanceof GeminiError) await trackCall(target.kind, e.outcome, e.httpStatus, e.usage, e.latencyMs);
+        throw e;
+      }
+      let parsed: ReturnType<typeof parseVerdict>;
+      try {
+        parsed = parseVerdict(reply.text);
+      } catch (e) {
+        await trackCall(target.kind, 'invalid_output', 200, reply.usage, reply.latencyMs);
+        throw e;
+      }
+      await trackCall(target.kind, 'ok', 200, reply.usage, reply.latencyMs);
+      const { verdict, adjusted } = parsed;
       const { data: done, error: doneErr } = await admin.rpc(rpc.complete, {
         [rpc.idParam]: target.id,
         p_verdict_judge: verdict.verdict_judge,
@@ -207,7 +344,7 @@ async function deliberate(target: Target, prompt: string): Promise<JudgeOutcome>
       return { status: 'judged', adjusted, ...target };
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
-      const retryable = e instanceof RetryableError || e instanceof VerdictValidationError;
+      const retryable = (e instanceof GeminiError && e.retryable) || e instanceof VerdictValidationError;
       console.error(`${tag} attempt ${attempt} failed: ${lastError}`);
       if (!retryable || attempt === MAX_LLM_ATTEMPTS) break;
       await new Promise((r) => setTimeout(r, 1500 * attempt));
@@ -219,6 +356,7 @@ async function deliberate(target: Target, prompt: string): Promise<JudgeOutcome>
 }
 
 async function judgeCase(caseId: string): Promise<JudgeOutcome> {
+  if (await budgetSpent()) return { status: 'deferred', kind: 'case', id: caseId };
   const { data: claimed, error: claimErr } = await admin.rpc('claim_case_for_verdict', { p_case_id: caseId });
   if (claimErr) throw new Error(`claim failed: ${claimErr.message}`);
   const row = (claimed as ClaimedCase[] | null)?.[0];
@@ -228,6 +366,7 @@ async function judgeCase(caseId: string): Promise<JudgeOutcome> {
 
 async function judgeAppeal(appealId: string): Promise<JudgeOutcome> {
   const target: Target = { kind: 'appeal', id: appealId };
+  if (await budgetSpent()) return { status: 'deferred', ...target };
   const { data: claimed, error: claimErr } = await admin.rpc('claim_appeal_for_verdict', { p_appeal_id: appealId });
   if (claimErr) throw new Error(`claim failed: ${claimErr.message}`);
   const a = (claimed as ClaimedAppeal[] | null)?.[0];
@@ -331,7 +470,9 @@ Deno.serve(async (req) => {
 
     // User-initiated (client fallback): synchronous so the app gets a result.
     const outcome = await judge();
-    const status = outcome.status === 'judged' ? 200 : outcome.status === 'not_claimable' ? 409 : 502;
+    // 409 for "not now" (already handled, or deferred by the daily budget): the
+    // client treats both as handled and waits for the verdict over Realtime.
+    const status = outcome.status === 'judged' ? 200 : outcome.status === 'failed' ? 502 : 409;
     return json(outcome, status);
   } catch (e) {
     console.error('ai-court-verdict fatal:', e);

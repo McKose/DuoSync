@@ -22,6 +22,9 @@ const ALLOWED_TYPES = new Set([
   'QUESTION_ANSWERED',
   'COUPLE_ENDED',
   'APPEAL_FILED',
+  // Owner-only Gemini budget alert from ai-court-verdict (D2); the app has no
+  // route for it, so a tap just opens the app.
+  'USAGE_ALERT',
 ]);
 
 interface PushRequest {

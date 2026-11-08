@@ -98,6 +98,7 @@ await db.exec(
 await db.exec(mig('20261031000000_decision_wheel.sql'));
 await db.exec(mig('20261031000100_leave_couple.sql'));
 await db.exec(mig('20261102000000_appeals.sql'));
+await db.exec(mig('20261108000000_llm_usage.sql'));
 await su(
   `insert into auth.users (id, email, raw_user_meta_data) values
    ($1, 'ayse@example.com', '{"display_name":"Ayşe"}'), ($2, 'berk@example.com', '{}'), ($3, 'eve@example.com', '{}')`,
@@ -741,6 +742,59 @@ await test('both can pair again immediately', async () => {
   assert.equal(r.rows[0].is_active, true);
 });
 
+console.log('Gemini usage log (D2)');
+const record = (outcome, tokens = 0, status = null, kind = 'case') =>
+  as('service', `select * from public.record_llm_usage($1, 'gemini-test', $2, $3, 1200, $4, 0, 0, $4)`, [kind, outcome, status, tokens]);
+
+await test('usage log has no link to a person, couple, case or text', async () => {
+  const cols = (await su(`select column_name from information_schema.columns
+                          where table_schema = 'private' and table_name = 'llm_usage' order by ordinal_position`)).rows.map((r) => r.column_name);
+  assert.deepEqual(cols, ['id', 'created_at', 'kind', 'model', 'outcome', 'http_status', 'latency_ms',
+    'prompt_tokens', 'output_tokens', 'thought_tokens', 'total_tokens', 'billable']);
+});
+
+await test('service records calls; only billable outcomes count toward the budget', async () => {
+  let r = (await record('ok', 1800, 200)).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('http_error', 0, 503)).rows[0]; // overload: rejected before generation
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('network_error')).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('timeout', 0, null, 'appeal')).rows[0]; // may have generated: counts
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [2, 1800]);
+  r = (await record('invalid_output', 2200, 200)).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [3, 4000]);
+  const today = (await as('service', `select * from public.llm_usage_today()`)).rows[0];
+  assert.deepEqual([Number(today.calls_today), Number(today.tokens_today)], [3, 4000]);
+});
+
+await test('bad input is rejected by the table checks', async () => {
+  await rejects(record('maybe'), /llm_usage_outcome_check/);
+  await rejects(record('ok', -5, 200), /check/);
+  await rejects(record('ok', 1, 200, 'plan'), /llm_usage_kind_check/);
+});
+
+await test('today = UTC day; rows older than 90 days are pruned on the next write', async () => {
+  await su(`insert into private.llm_usage (created_at, kind, model, outcome, latency_ms, total_tokens) values
+            (date_trunc('day', now() at time zone 'UTC') at time zone 'UTC' - interval '1 second', 'case', 'm', 'ok', 1, 99999),
+            (now() - interval '91 days', 'case', 'm', 'ok', 1, 77777)`);
+  const today = (await as('service', `select * from public.llm_usage_today()`)).rows[0];
+  assert.deepEqual([Number(today.calls_today), Number(today.tokens_today)], [3, 4000]); // yesterday excluded
+  await record('ok', 1000, 200);
+  const old = await su(`select count(*)::int n from private.llm_usage where total_tokens = 77777`);
+  assert.equal(old.rows[0].n, 0);
+  const yesterday = await su(`select count(*)::int n from private.llm_usage where total_tokens = 99999`);
+  assert.equal(yesterday.rows[0].n, 1);
+});
+
+await test('clients and anon can neither record, read totals nor touch the table', async () => {
+  for (const who of [A, C, 'anon']) {
+    await rejects(as(who, `select * from public.record_llm_usage('case', 'm', 'ok', 200, 1, 1, 1, 0, 2)`), /permission denied/);
+    await rejects(as(who, `select * from public.llm_usage_today()`), /permission denied/);
+    await rejects(as(who, `select count(*) from private.llm_usage`), /permission denied/);
+  }
+});
+
 console.log('Schedules');
 await test('cron jobs registered', async () => {
   const r = await su(`select name from cron.jobs order by name`);
@@ -754,7 +808,7 @@ const liveCheck = readFileSync(join(here, '..', 'verify', 'live_check.sql'), 'ut
 await db.exec(`
 create schema supabase_migrations;
 create table supabase_migrations.schema_migrations (version text primary key);
-insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000'), ('20261031000100'), ('20261102000000');
+insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000'), ('20261031000100'), ('20261102000000'), ('20261108000000');
 create view cron.job as
   select row_number() over (order by name)::bigint as jobid, name as jobname, schedule, command, true as active
   from cron.jobs;

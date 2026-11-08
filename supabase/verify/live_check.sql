@@ -20,7 +20,8 @@ expected_tables(name) as (
            ('wheel_options'), ('wheel_spins'), ('court_appeals')
 ),
 mig as (
-    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000', '20261031000100', '20261102000000')) as n,
+    select count(*) filter (where version in ('20261008000000', '20261008000100', '20261031000000', '20261031000100', '20261102000000',
+                                              '20261108000000')) as n,
            coalesce(string_agg(version, ', ' order by version), 'none') as versions
     from supabase_migrations.schema_migrations
 ),
@@ -90,7 +91,8 @@ svc_exec as (
       and p.proname in ('claim_case_for_verdict', 'complete_verdict', 'fail_verdict',
                         'list_claimable_cases', 'release_due_messages',
                         'claim_appeal_for_verdict', 'complete_appeal_verdict',
-                        'fail_appeal_verdict', 'list_claimable_appeals')
+                        'fail_appeal_verdict', 'list_claimable_appeals',
+                        'record_llm_usage', 'llm_usage_today')
       and has_function_privilege('authenticated', p.oid, 'execute')
 ),
 -- The migrations narrow Supabase's default Data API grants instead of granting
@@ -123,7 +125,7 @@ definer_path as (
                          or (p.prorettype = 'event_trigger'::regtype and cfg like 'search_path=_%'))
 )
 select n, item, ok, detail from (
-    select 1 as n, 'migrations applied (5)' as item, mig.n = 5 as ok, mig.versions as detail from mig
+    select 1 as n, 'migrations applied (6)' as item, mig.n = 6 as ok, mig.versions as detail from mig
     union all
     select 2, 'extensions pg_cron + pg_net', ext.n = 2, ext.list from ext
     union all

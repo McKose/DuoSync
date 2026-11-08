@@ -25,11 +25,14 @@ pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite`
 | `supabase/migrations/20261031000000_decision_wheel.sql` | Decision wheel tables, RLS, RPCs (C1) |
 | `supabase/migrations/20261031000100_leave_couple.sql` | `leave_couple()`: unpair, cascade-delete all shared data (B2) |
 | `supabase/migrations/20261102000000_appeals.sql` | Appeals (C3): `court_appeals`, reply lock, 12 h / 2-round rules, webhooks |
+| `supabase/migrations/20261108000000_llm_usage.sql` | D2: `private.llm_usage` (per-call model/outcome/latency/tokens, no ids or text), `record_llm_usage`, `llm_usage_today` |
 | `supabase/functions/ai-court-verdict/` | Claims case or appeal via RPC, calls Gemini, validates JSON, writes verdict |
 | `supabase/functions/send-push-notification/` | Expo push sender (internal-secret auth) |
 | `supabase/functions/_shared/verdict.ts` | Case + appeal prompts, schema validation, fault normalization, injection fence (+ `.test.ts`) |
-| `supabase/tests/rls.test.mjs` | 65 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, decision wheel, appeals, leave couple, live-check script |
+| `supabase/functions/_shared/usage.ts` | D2: token parsing, billable rule, daily limits (`GEMINI_DAILY_CALL_LIMIT` / `_TOKEN_LIMIT`), 80 % / 100 % alert levels (+ `.test.ts`) |
+| `supabase/tests/rls.test.mjs` | 71 PGlite tests: migrations, RLS, RPC rules, cross-couple isolation, decision wheel, appeals, leave couple, usage log, live-check script |
 | `supabase/verify/live_check.sql` | Read-only post-setup check for the live project (A1/A2); run in SQL editor |
+| `supabase/verify/usage_report.sql` | D2: Gemini calls / tokens / errors / latency per UTC day, last 14 days |
 | `src/api/*` | One module per domain; **first line of every fn: `if (IS_DEMO) return demo.…`** |
 | `src/demo/` | In-device fake backend mirroring server rules; partner bot "Deniz"; offline judge |
 | `src/hooks/` | Query/mutation hooks, `useRealtimeSubscription`, `useBatterySync`, `usePushRegistration` |
@@ -46,7 +49,8 @@ pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite`
 
 ### Schema objects
 Tables: `profiles, couples, pairing_attempts, push_tokens, court_cases, plans,
-delayed_messages, pending_questions, wheel_options, wheel_spins, court_appeals`. Enums: `case_status`
+delayed_messages, pending_questions, wheel_options, wheel_spins, court_appeals`, plus
+`private.llm_usage` (service-only telemetry, not in the Data API). Enums: `case_status`
 (incl. `DELIBERATING`, `APPEALED` while a round is open), `appeal_status`, `message_status`
 (`PENDING/SENT/CANCELLED`), `partner_status`.
 Client RPCs: `create_pairing_code, pair_with_code, my_active_couple, update_my_presence,
@@ -55,7 +59,7 @@ cancel_delayed_message, ask_question, answer_question, add_wheel_option,
 remove_wheel_option, spin_wheel, leave_couple, file_appeal, reply_appeal`.
 Service-only RPCs: `claim_case_for_verdict, complete_verdict, fail_verdict,
 list_claimable_cases, release_due_messages, claim_appeal_for_verdict, complete_appeal_verdict,
-fail_appeal_verdict, list_claimable_appeals`.
+fail_appeal_verdict, list_claimable_appeals, record_llm_usage, llm_usage_today`.
 Cron: `duosync-release-messages` (1 min), `duosync-court-sweep` (10 min),
 `duosync-prune-pairing-attempts`.
 

@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-11-08 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; B4 done in code; next: A4 needs two physical Android phones).
+Last updated: 2026-11-08 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; B4 + D2 done in code; next: A4 needs two physical Android phones).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -22,6 +22,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-11-03..04 | **A1 on `ndxpbbvfgupxlgoqoesh`** via the claude.ai Supabase connector (ref checked before every call). All 5 migrations applied; MCP records apply timestamps as versions → aligned to the file names (repair-equivalent). Live schema compared with the PGlite build by per-category md5 fingerprints (functions, policies, columns, constraints, indexes, triggers, table/column/function grants, RLS, enums, publication, cron jobs): identical; only extra object is Supabase's own `public.rls_auto_enable()` (automatic-RLS event trigger). Found + fixed: `live_check` row 13 flagged that function → event-trigger fns only need *a* pinned path; functions read the server key via `serviceKey()` (`SUPABASE_SECRET_KEYS.default`, legacy `SUPABASE_SERVICE_ROLE_KEY` fallback). Both functions deployed (ACTIVE, `verify_jwt=false`). Vault: `duosync_project_url` + `duosync_internal_secret` (64 hex, generated in-DB, never selected). User then entered `INTERNAL_WEBHOOK_SECRET` (= Vault value) and `GEMINI_API_KEY` in the dashboard (the connector's secret prompt would not open). Before that every sweep got 500 (`Missing required env var GEMINI_API_KEY` at boot); after it a manual sweep got 202 and `sweep results []`, proving key + secret + service key end to end | test:db 65/65, test:functions 9/9; **live_check 14/14 at 18:15 UTC**, both functions ACTIVE |
 | 2026-11-04..08 | **A2** advisors on the live project: 0 ERROR, all WARNs justified (RLS-helper RPC exposure pinned by a new PGlite test). CI flake found and fixed: wheel tests assumed insertion order, but PGlite's clock has ms resolution (reproduced by forcing the tie). **A3**: full chain verified live with two `*.invalid` test users; `gemini-3.8-flash` returned 503 "high demand" for 14 h, so the 5-claim cap killed the test case after ≈ 39 min (risk recorded; user kept the retry policy, backlog item added). User chose Flash-Lite → default `gemini-3.5-flash-lite`, first call judged in ≈ 3 s, injection not obeyed. Test data removed via `leave_couple()` (B2 ran live) + user deletion | test:db 66/66, test:functions 9/9; live project empty again |
 | 2026-11-08 | **B4** encrypted storage at zero cost (user): AES-256-GCM from `expo-crypto` (already installed), key in `expo-secure-store` (Expo SDK). Applied to the Supabase session **and** the persisted query cache (pleas, verdicts, messages). Fail closed on tamper / lost key, entry name bound as AAD, single-flight key creation, legacy plaintext migrated on read. New `test:unit` suite (CI step added) | test:unit 13/13 (2 mutations caught), E2E 14/14; on-device check pending (A4/A5) |
+| 2026-11-08 | **D2** Gemini cost/quota monitoring at zero cost (user): per-call usage log without any identifier or text, daily call/token cap checked before claiming (deferred work uses no attempt), 80 % / 100 % alerts (log + optional free Expo push), SQL report. Only Supabase free tier + Expo push; no new service | test:db 71/71, test:functions 16/16 (2 mutations caught) |
 
 ## 2. Current state
 
@@ -38,6 +39,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | Eşleşme bozma (B2) | ✅ code + tests; ✅ `leave_couple()` ran live once (A3 cleanup, 2026-11-08); ❌ not yet on phones (A5); rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
 | Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore), ❌ not yet on a phone (A4/A5) |
+| Gemini maliyet/kota izleme (D2) | ✅ code + tests (per-call log, daily cap, 80/100 % alert, report) |
 | Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 5 migrations, 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
 | Physical device run | ❌ never |
 
@@ -223,7 +225,23 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
 
 ### Phase D — Closed beta
 - [ ] **D1.** — *deferred (personal use; sideloaded APK)* — Play internal testing track; production signing via `eas build --profile production`.
-- [ ] **D2.** Gemini cost/quota monitoring (log tokens per call, alert threshold).
+- [x] **D2.** Gemini cost/quota monitoring (log tokens per call, alert threshold). — done 2026-11-08 (user: zero cost)
+  *Delivered:* migration `20261108000000_llm_usage.sql`: `private.llm_usage`, one row per Gemini call (model, outcome,
+  HTTP status, latency, prompt/output/thinking/total tokens from `usageMetadata`) with **no case, couple, user id or
+  text**, so it survives an unpair without linking to anyone (B2); RLS deny-all, not in the Data API; 90-day retention
+  pruned on write (no extra cron job). Service-only RPCs `record_llm_usage` / `llm_usage_today`. "Billable" = the model
+  may have processed the call (`ok`, `invalid_output`, `timeout`); 429 / 503 / network errors are free and do not
+  count. `ai-court-verdict`: records every call (accounting failures never fail a verdict); **hard daily cap**
+  `GEMINI_DAILY_CALL_LIMIT` (150) / `GEMINI_DAILY_TOKEN_LIMIT` (300 000), UTC day, checked **before claiming**, so a
+  deferred case or appeal uses no attempt and is judged by the first sweep after midnight (client fallback gets 409 →
+  "already handled", no client or demo change). A claim already in flight can overshoot by at most one call. Fails
+  open with an error log if usage cannot be read. Alerts at 80 % and 100 %: log line, plus an Expo push (free) to
+  `USAGE_ALERT_USER_ID` if set (`USAGE_ALERT` type; the app ignores unknown types on tap). Report:
+  `supabase/verify/usage_report.sql`. Defaults sized from the app's own caps (≤ 30 verdict rounds/day ≈ ≤ 60
+  billable calls ≈ ≤ 240 k tokens). Tests: PGlite +5 (no-identifier columns pinned, billable counting, UTC day,
+  pruning, client/anon denied; mutation: dropping the revokes fails 2), Deno +7 (usage parsing, limits, levels;
+  mutation: alert firing on every call fails 1). Zero cost: the real guarantee on Google's side is a free-tier key (no
+  billing linked in AI Studio); the cap is the second line and also keeps the free quota from running out mid-day.
 
 ### Backlog (trigger-based)
 | Task | Trigger |

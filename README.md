@@ -70,7 +70,7 @@ cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ### 2. Supabase
 ```bash
 npx supabase link --project-ref <ref>
-npx supabase db push                          # beş migration
+npx supabase db push                          # altı migration
 
 # Vault (SQL editöründe, bir kez — git'e girmesin diye migration'da değil):
 #   select vault.create_secret('https://<ref>.supabase.co', 'duosync_project_url');
@@ -80,6 +80,9 @@ npx supabase secrets set \
   GEMINI_API_KEY=<key> \
   INTERNAL_WEBHOOK_SECRET=<vault'takiyle aynı dize> \
   GEMINI_MODEL=gemini-3.5-flash-lite      # opsiyonel (varsayılan bu)
+# GEMINI_DAILY_CALL_LIMIT=150             # opsiyonel: günlük (UTC) model çağrısı tavanı
+# GEMINI_DAILY_TOKEN_LIMIT=300000         # opsiyonel: günlük token tavanı
+# USAGE_ALERT_USER_ID=<profil uuid>       # opsiyonel: %80 / %100'de bu kullanıcıya push
 # EXPO_ACCESS_TOKEN=<token>               # opsiyonel: Expo "enhanced push security"
 
 npx supabase functions deploy ai-court-verdict send-push-notification
@@ -89,6 +92,8 @@ npx supabase functions deploy ai-court-verdict send-push-notification
 `duosync_internal_secret` için `openssl rand -hex 32` yeterli; aynı dize `INTERNAL_WEBHOOK_SECRET` olarak da girilmeli.
 
 Sunucu anahtarı elle girilmez: Supabase fonksiyonlara `SUPABASE_SECRET_KEYS` (yeni `sb_secret_…` anahtarı, `default`) ve eski projelerde `SUPABASE_SERVICE_ROLE_KEY` enjekte eder. `_shared/http.ts` → `serviceKey()` önce yenisini, yoksa eskisini kullanır (eski JWT anahtarları 2026 sonunda kapanıyor).
+
+**Maliyet ve kota (D2):** Her Gemini çağrısı `private.llm_usage`'a yazılır (model, sonuç, süre, token; dava/kişi/metin yok). Fonksiyon bir davayı üstlenmeden önce günün (UTC) kullanımına bakar: çağrı ya da token tavanı dolduysa davayı üstlenmez, deneme hakkı yemez, ertesi gün ilk taramada karara bağlanır. %80 ve %100'de log'a uyarı düşer, `USAGE_ALERT_USER_ID` verilmişse o kullanıcıya push gider. Rapor: `supabase/verify/usage_report.sql` (SQL editörü, son 14 gün). Google tarafında sıfır maliyetin asıl güvencesi anahtarın **ücretsiz katmanda** olması (AI Studio'da faturalandırma bağlı değil); uygulamadaki tavan ikinci emniyettir ve ücretsiz kotanın gün ortasında tükenmesini de önler.
 
 **Kurulum doğrulaması:** deploy'dan ≥ 10 dk sonra (mahkeme süpürmesi bir kez çalışmış olsun) `supabase/verify/live_check.sql` dosyasını SQL editöründe çalıştırın; 14 satırın hepsi `ok = true` olmalı. Satır 8 (webhook gidiş-dönüş) hatalıysa detay sütunu nedeni söyler: 401 = gateway JWT doğrulaması açık, 403 = iki secret farklı, 404 = fonksiyon deploy edilmemiş veya proje URL'si yanlış. Fonksiyonların `ACTIVE` olduğunu `npx supabase functions list` ile kontrol edin.
 
