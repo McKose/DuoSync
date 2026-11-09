@@ -131,7 +131,10 @@ jobs:
           mkdir -p out && cp "$src" "out/$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "### ${{ matrix.variant }} APK hazır: \`$name\` ($(du -h "out/$name" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "out/$name" | head -3 || true
+          # The runner has several build-tools versions; a bare glob passed the
+          # second apksigner path to the first as its command (run 5).
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$apksigner" verify --print-certs "out/$name" | head -3 || true
           if [[ "${{ matrix.variant }}" == live ]]; then
             host="${EXPO_PUBLIC_SUPABASE_URL#https://}"; host="${host%/}"
             # Hermes keeps string literals readable in the bytecode bundle.

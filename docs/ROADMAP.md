@@ -1,6 +1,6 @@
 # DuoSync — Status & Roadmap
 
-Last updated: 2026-11-08 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; B4 + D2 done in code; next: A4 needs two physical Android phones).
+Last updated: 2026-11-09 (A1–A3 done on `ndxpbbvfgupxlgoqoesh`; B4 + D2 done; live APK built; next: A4 on two physical Android phones).
 Keep this file current: tick tasks, add findings, never delete history rows.
 
 ## 1. History (what has been done)
@@ -24,6 +24,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-11-08 | **B4** encrypted storage at zero cost (user): AES-256-GCM from `expo-crypto` (already installed), key in `expo-secure-store` (Expo SDK). Applied to the Supabase session **and** the persisted query cache (pleas, verdicts, messages). Fail closed on tamper / lost key, entry name bound as AAD, single-flight key creation, legacy plaintext migrated on read. New `test:unit` suite (CI step added) | test:unit 13/13 (2 mutations caught), E2E 14/14; on-device check pending (A4/A5) |
 | 2026-11-08 | **D2** Gemini cost/quota monitoring at zero cost (user): per-call usage log without any identifier or text, daily call/token cap checked before claiming (deferred work uses no attempt), 80 % / 100 % alerts (log + optional free Expo push), SQL report. Only Supabase free tier + Expo push; no new service | test:db 71/71, test:functions 16/16 (2 mutations caught) |
 | 2026-11-09 | **Demo APK rebuilt** from `16136ae` (first build since 2026-10-13; includes C1, B2, C3, B4's new `expo-secure-store` native module, D2) by pushing to `apk-build` (user). Two CI network failures fixed on the way, neither in our code: run 2 = Gradle wrapper's 10 s timeout on `services.gradle.org` → 120 s + separate retried download step; run 3 = 504 from the Kotlin compiler jar's GitHub release redirect → Gradle HTTP retries/timeouts, one retry of `assembleRelease`, Gradle cache saved from `apk-build` too | run 4 green in 11 min; artifact `duosync-demo-apk` 24.4 MB, kept until 2026-12-09; not yet installed on a phone |
+| 2026-11-09 | **Live APK** (A4 zero-cost path): `android-apk.yml` builds a demo + live matrix; user set repo variables `DUOSYNC_SUPABASE_URL` / `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` and reported Confirm email off (not readable from the cloud session: `*.supabase.co` blocked by the proxy → verify via `auth.users.email_confirmed_at` after the first sign-up). Pushed `da51b27` to `apk-build`. Found in the log: the `apksigner` glob matched several build-tools versions ("Unsupported command"; diagnostic only) → newest version picked | run 5 green in ≈ 13 min, both jobs; live job: `EXPO_PUBLIC_DEMO_MODE=0`, "Bundle points at ndxpbbvfgupxlgoqoesh.supabase.co"; artifacts `duosync-live-apk` / `duosync-demo-apk` 24.4 MB, kept until 2026-12-09; push off (no EAS project id) |
 
 ## 2. Current state
 
@@ -42,7 +43,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore), ❌ not yet on a phone (A4/A5) |
 | Gemini maliyet/kota izleme (D2) | ✅ code + tests (per-call log, daily cap, 80/100 % alert, report); ✅ live (2026-11-08: 1 verdict = 1117 tokens logged) |
 | Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 6 migrations (D2 added 2026-11-08), 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
-| Physical device run | ❌ never |
+| Physical device run | ❌ never; live APK ready (2026-11-09, run 5), installation pending |
 
 ## 3. Product decisions
 
@@ -147,6 +148,9 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   Before two people sign up: Supabase's built-in mailer only reaches the organisation's own team addresses, so
   turn **Confirm email off** for this personal project; after both accounts exist, turn **Allow new users to sign up
   off** so a leaked APK cannot open accounts (and spend the D2 Gemini budget).
+  *Progress 2026-11-09:* live APK built (run 5, `da51b27`, bundle verified to point at `ndxpbbvfgupxlgoqoesh`);
+  handed to the user for installation on both phones. Next: both sign up → check `email_confirmed_at` set and
+  profiles created, pair, walk every screen; then sign-ups off. Push (EAS project id + FCM) is the remaining gap.
 - [ ] **A5. Live verification matrix** (1 d)
   | Scenario | Expected |
   |---|---|
