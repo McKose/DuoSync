@@ -249,6 +249,8 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   2032 ms, 778 prompt + 339 output = **1117 tokens**, billable; `llm_usage_today()` = 1 / 1117. Measured ≈ 1.1 k
   tokens per first-instance verdict, below the 2–4 k estimate, so the 300 k default leaves ≥ 4× headroom over the
   app's own maximum. Test couple removed with `leave_couple()`; the anonymous usage row is kept as a real sample.
+  The two `d2-test-*` users were deleted by the user in the dashboard on 2026-11-09 (the connector's delete
+  confirmation never reached them); verified: 0 users, 0 profiles, 0 couples, 0 cases, 1 anonymous usage row.
 
 ### Backlog (trigger-based)
 | Task | Trigger |
