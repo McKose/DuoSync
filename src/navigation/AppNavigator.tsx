@@ -13,6 +13,7 @@ import { LoginScreen } from '@/screens/auth/LoginScreen';
 import { PairingScreen } from '@/screens/auth/PairingScreen';
 import { NewCaseScreen } from '@/screens/court/NewCaseScreen';
 import { VerdictScreen } from '@/screens/court/VerdictScreen';
+import { DecisionWheelScreen } from '@/screens/dashboard/DecisionWheelScreen';
 import { PlanDetailScreen } from '@/screens/dashboard/PlanDetailScreen';
 import { navigationRef } from './navigationRef';
 import { TabNavigator } from './TabNavigator';
@@ -65,6 +66,7 @@ export function AppNavigator() {
           <>
             <Stack.Screen name="Tabs" component={TabNavigator} options={{ headerShown: false }} />
             <Stack.Screen name="PlanDetail" component={PlanDetailScreen} options={{ title: 'Plan' }} />
+            <Stack.Screen name="DecisionWheel" component={DecisionWheelScreen} options={{ title: 'Ne yesek?' }} />
             <Stack.Screen name="NewCase" component={NewCaseScreen} options={{ title: 'Yeni dava', presentation: 'modal' }} />
             <Stack.Screen name="Verdict" component={VerdictScreen} options={{ title: 'Dava dosyası' }} />
           </>

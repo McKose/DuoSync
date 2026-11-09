@@ -7,6 +7,7 @@ import { Screen } from '@/components/common/Screen';
 import { ErrorBanner } from '@/components/common/StateViews';
 import { TextField } from '@/components/common/TextField';
 import { IS_DEMO } from '@/demo/config';
+import { lastStorageProblem } from '@/lib/secureStorage';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -17,6 +18,8 @@ export function LoginScreen() {
   const [name, setName] = useState('');
   const [touched, setTouched] = useState(false);
   const [confirmSent, setConfirmSent] = useState(false);
+  // Read once per mount: why the saved session could not be used (B4), if so.
+  const [storageProblem] = useState(lastStorageProblem);
 
   const emailErr = touched && !EMAIL_RE.test(email.trim()) ? 'Geçerli bir e-posta gir.' : null;
   const passErr = touched && password.length < 8 ? 'Şifre en az 8 karakter olmalı.' : null;
@@ -62,6 +65,14 @@ export function LoginScreen() {
         <View className="mb-4 rounded-xl2 bg-paper-sunk p-3">
           <Text className="text-xs leading-5 text-ink-soft">
             Demo modu: hiçbir veritabanına bağlanılmaz. Herhangi bir e-posta ve en az 8 karakterlik bir şifreyle giriş yapabilirsin.
+          </Text>
+        </View>
+      ) : null}
+
+      {storageProblem ? (
+        <View className="mb-4 rounded-xl2 bg-paper-sunk p-3">
+          <Text className="text-xs leading-5 text-ink-soft">
+            Kayıtlı oturum bu cihazda okunamadı; tekrar giriş yapman yeterli. Sorun sürerse bu satırı paylaş: {storageProblem}
           </Text>
         </View>
       ) : null}

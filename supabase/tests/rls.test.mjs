@@ -95,6 +95,10 @@ await db.exec(mig('20261008000000_init_schema.sql'));
 await db.exec(
   mig('20261008000100_jobs_and_webhooks.sql').replace(/^create extension.*$/gim, '-- (stubbed) $&'),
 );
+await db.exec(mig('20261031000000_decision_wheel.sql'));
+await db.exec(mig('20261031000100_leave_couple.sql'));
+await db.exec(mig('20261102000000_appeals.sql'));
+await db.exec(mig('20261108000000_llm_usage.sql'));
 await su(
   `insert into auth.users (id, email, raw_user_meta_data) values
    ($1, 'ayse@example.com', '{"display_name":"Ayşe"}'), ($2, 'berk@example.com', '{}'), ($3, 'eve@example.com', '{}')`,
@@ -141,6 +145,18 @@ await test('B pairs with lowercase/whitespace-padded code', async () => {
 await test('third party C cannot see the couple', async () => {
   const r = await as(C, `select * from public.couples`);
   assert.equal(r.rows.length, 0);
+});
+
+// A2: the advisor flags these RLS helpers because /rest/v1/rpc exposes them
+// (authenticated needs EXECUTE for the policies). Justified only while they
+// answer about the caller's own couple and nothing else.
+await test('RLS helpers callable as RPCs answer only about the caller', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  const q = `select public.is_couple_member($1) as member, public.is_my_partner($2) as partner,
+                    public.is_my_partner($3) as other`;
+  assert.deepEqual((await as(A, q, [cid, B, C])).rows[0], { member: true, partner: true, other: false });
+  assert.deepEqual((await as(C, q, [cid, A, B])).rows[0], { member: false, partner: false, other: false });
+  await rejects(as('anon', `select public.is_couple_member($1)`, [cid]), /permission denied/);
 });
 
 await test('C cannot reuse the consumed code; failures are throttled at 10/h', async () => {
@@ -450,10 +466,400 @@ await test('paired users cannot join a third couple', async () => {
   assert.ok(c.rows.length === 1);
 });
 
+console.log('Decision wheel');
+/** Labels in display order: (created_at, id), the order spin_wheel() snapshots and the client lists. */
+const optionLabels = async (who) =>
+  (await as(who, `select label from public.wheel_options order by created_at, id`)).rows.map((r) => r.label);
+/**
+ * Labels as a set. PGlite's clock has millisecond resolution, so options added in
+ * the same millisecond tie on created_at and the random uuid decides their order;
+ * insertion order is not observable here (CI failure on 83036f5).
+ */
+const optionSet = async (who) => (await optionLabels(who)).sort();
+/** Move every spin back a minute so the 10 s cooldown does not block the next one. */
+const pastCooldown = () => su(`update public.wheel_spins set created_at = created_at - interval '1 minute'`);
+
+await test('both partners add options; label validation and case-insensitive duplicate guard', async () => {
+  await as(A, `select * from public.add_wheel_option('  Sushi ')`);
+  await as(B, `select * from public.add_wheel_option('Köfte')`);
+  await rejects(as(A, `select * from public.add_wheel_option('   ')`), /INVALID_OPTION_LABEL/);
+  await rejects(as(A, `select * from public.add_wheel_option($1)`, ['x'.repeat(31)]), /INVALID_OPTION_LABEL/);
+  await rejects(as(B, `select * from public.add_wheel_option('sushi')`), /DUPLICATE_OPTION/);
+  assert.deepEqual(await optionSet(A), ['Köfte', 'Sushi']);
+  assert.deepEqual(await optionSet(B), ['Köfte', 'Sushi']);
+});
+
+await test('stranger and other couple: no visibility, cannot add or remove', async () => {
+  assert.deepEqual(await optionLabels(C), []);
+  assert.deepEqual(await optionLabels(D), []);
+  await rejects(as(C, `select * from public.add_wheel_option('Pizza')`), /NOT_PAIRED/);
+  const opt = await su(`select id from public.wheel_options where label = 'Sushi'`);
+  await rejects(as(C, `select public.remove_wheel_option($1)`, [opt.rows[0].id]), /OPTION_NOT_FOUND/);
+  await rejects(as(D, `select public.remove_wheel_option($1)`, [opt.rows[0].id]), /OPTION_NOT_FOUND/);
+  await rejects(as('anon', `select public.spin_wheel()`), /permission denied/);
+});
+
+await test('direct writes to wheel tables are denied', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  await rejects(as(A, `insert into public.wheel_options (couple_id, label) values ($1, 'Pizza')`, [cid]), /permission denied/);
+  await rejects(
+    as(A, `insert into public.wheel_spins (couple_id, option_labels, result_index, result_label) values ($1, '["a","b"]', 0, 'a')`, [cid]),
+    /permission denied/,
+  );
+  await rejects(as(A, `update public.wheel_options set label = 'Pizza'`), /permission denied/);
+});
+
+await test('cap of 12 options per couple', async () => {
+  for (let i = 1; i <= 10; i++) await as(i % 2 ? A : B, `select * from public.add_wheel_option($1)`, [`Seçenek ${i}`]);
+  await rejects(as(A, `select * from public.add_wheel_option('On üçüncü')`), /WHEEL_FULL/);
+  assert.equal((await optionLabels(A)).length, 12);
+});
+
+await test('spin needs at least two options', async () => {
+  await rejects(as(D, `select * from public.spin_wheel()`), /NOT_ENOUGH_OPTIONS/);
+  await as(D, `select * from public.add_wheel_option('Mantı')`);
+  await rejects(as(D, `select * from public.spin_wheel()`), /NOT_ENOUGH_OPTIONS/);
+});
+
+let spinId;
+await test('spin is drawn and stored server-side; both members see the same row, nobody else does', async () => {
+  const r = (await as(A, `select * from public.spin_wheel()`)).rows[0];
+  spinId = r.id;
+  assert.equal(r.spun_by, A);
+  assert.deepEqual(r.option_labels, await optionLabels(A));
+  assert.equal(r.option_labels[r.result_index], r.result_label);
+  const seen = await as(B, `select id, result_label from public.wheel_spins`);
+  assert.deepEqual(seen.rows, [{ id: r.id, result_label: r.result_label }]);
+  assert.equal((await as(C, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 0);
+  assert.equal((await as(D, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 0);
+});
+
+await test('10 s cooldown applies to the couple, not the user', async () => {
+  await rejects(as(B, `select * from public.spin_wheel()`), /SPIN_COOLDOWN/);
+  // The other couple is unaffected.
+  await as(E, `select * from public.add_wheel_option('Lahmacun')`);
+  const d = (await as(D, `select * from public.spin_wheel()`)).rows[0];
+  assert.ok(['Mantı', 'Lahmacun'].includes(d.result_label));
+  assert.equal((await as(A, `select count(*)::int n from public.wheel_spins where id = $1`, [d.id])).rows[0].n, 0);
+});
+
+await test('stored result cannot be rewritten; a mismatched result is rejected even for the service role', async () => {
+  await rejects(as(B, `update public.wheel_spins set result_label = 'Köfte' where id = $1`, [spinId]), /permission denied/);
+  await rejects(as(A, `delete from public.wheel_spins where id = $1`, [spinId]), /permission denied/);
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  await rejects(
+    su(`insert into public.wheel_spins (couple_id, option_labels, result_index, result_label) values ($1, '["a","b"]', 0, 'b')`, [cid]),
+    /wheel_spins_result_matches/,
+  );
+});
+
+await test('partner can remove an option; draw covers every option; history capped at 20', async () => {
+  const extra = await su(`select id from public.wheel_options where label like 'Seçenek %' or label = 'Köfte'`);
+  for (const [i, row] of extra.rows.entries()) await as(i % 2 ? A : B, `select public.remove_wheel_option($1)`, [row.id]);
+  await as(B, `select * from public.add_wheel_option('Pide')`);
+  await as(A, `select * from public.add_wheel_option('Döner')`);
+  assert.deepEqual(await optionSet(A), ['Döner', 'Pide', 'Sushi']);
+  const wins = new Set();
+  for (let i = 0; i < 60; i++) {
+    await pastCooldown();
+    wins.add((await as(i % 2 ? A : B, `select result_label from public.spin_wheel()`)).rows[0].result_label);
+  }
+  // P(an option never wins in 60 uniform draws of 3) ≈ 3·(2/3)^60 ≈ 3e-10.
+  assert.deepEqual([...wins].sort(), ['Döner', 'Pide', 'Sushi']);
+  assert.equal((await as(A, `select count(*)::int n from public.wheel_spins`)).rows[0].n, 20);
+});
+
+console.log('Appeals (istinaf)');
+let appealId;
+const appealCalls = async (type) => (await su(`select body from net.calls where body->>'type' = $1 order by id`, [type])).rows.map((r) => r.body);
+const caseStatus = async (id) => (await su(`select status from public.court_cases where id = $1`, [id])).rows[0].status;
+
+await test('appeal needs a JUDGED case; strangers, the other couple and anon are refused', async () => {
+  const open = (await su(`select id from public.court_cases where title = 'Geç kalma'`)).rows[0].id;
+  await rejects(as(A, `select * from public.file_appeal($1, 'Bu karar haksız, yeniden bakılsın.')`, [open]), /APPEAL_NOT_ALLOWED/);
+  await rejects(as(C, `select * from public.file_appeal($1, 'Bu karar haksız, yeniden bakılsın.')`, [caseId]), /CASE_NOT_FOUND/);
+  await rejects(as(D, `select * from public.file_appeal($1, 'Bu karar haksız, yeniden bakılsın.')`, [caseId]), /CASE_NOT_FOUND/);
+  await rejects(as('anon', `select * from public.file_appeal($1, 'Bu karar haksız, yeniden bakılsın.')`, [caseId]), /permission denied/);
+  const cid = (await su(`select couple_id from public.court_cases where id = $1`, [caseId])).rows[0].couple_id;
+  await rejects(
+    as(B, `insert into public.court_appeals (case_id, couple_id, round, appellant_id, respondent_id, appellant_reason, reply_deadline)
+           values ($1, $2, 1, $3, $4, 'Doğrudan yazmaya çalışıyorum.', now())`, [caseId, cid, B, A]),
+    /permission denied/,
+  );
+});
+
+await test('defendant B appeals round 1: respondent is A, case goes APPEALED, A is notified', async () => {
+  await rejects(as(B, `select * from public.file_appeal($1, 'kısa')`, [caseId]), /check constraint/);
+  const r = (await as(B, `select * from public.file_appeal($1, 'Çamaşır emeği hiç hesaba katılmadı.')`, [caseId])).rows[0];
+  appealId = r.id;
+  assert.equal(r.round, 1);
+  assert.equal(r.respondent_id, A);
+  assert.equal(r.status, 'AWAITING_REPLY');
+  const hours = (new Date(r.reply_deadline) - new Date(r.created_at)) / 3_600_000;
+  assert.equal(Math.round(hours), 12);
+  assert.equal(await caseStatus(caseId), 'APPEALED');
+  const push = await appealCalls('APPEAL_FILED');
+  assert.deepEqual(push.map((b) => [b.user_id, b.data.appeal_id]), [[A, appealId]]);
+  assert.ok(!JSON.stringify(push[0]).includes('Çamaşır'));
+  await rejects(as(A, `select * from public.file_appeal($1, 'Ben de itiraz ediyorum, sırayla.')`, [caseId]), /APPEAL_PENDING/);
+  for (const who of [A, B]) assert.equal((await as(who, `select count(*)::int n from public.court_appeals`)).rows[0].n, 1);
+  for (const who of [C, D]) assert.equal((await as(who, `select count(*)::int n from public.court_appeals`)).rows[0].n, 0);
+});
+
+await test('reply lock: no LLM claim before the reply; only the respondent replies, once', async () => {
+  assert.equal((await as('service', `select * from public.claim_appeal_for_verdict($1)`, [appealId])).rows.length, 0);
+  await rejects(as(B, `select * from public.reply_appeal($1, 'Kendime cevap')`, [appealId]), /NOT_RESPONDENT/);
+  await rejects(as(C, `select * from public.reply_appeal($1, 'Sızma')`, [appealId]), /APPEAL_NOT_FOUND/);
+  const before = (await su(`select count(*)::int n from net.calls where body->>'appeal_id' = $1`, [appealId])).rows[0].n;
+  await as(A, `select * from public.reply_appeal($1, 'Çamaşır zaten onun sırasıydı.')`, [appealId]);
+  const hooks = await su(`select url from net.calls where body->>'appeal_id' = $1`, [appealId]);
+  assert.equal(hooks.rows.length, before + 1);
+  assert.match(hooks.rows.at(-1).url, /ai-court-verdict$/);
+  await rejects(as(A, `select * from public.reply_appeal($1, 'Bir daha')`, [appealId]), /REPLY_CLOSED/);
+});
+
+await test('claim is atomic; ratios must sum to 100; verdict lands, original kept, both notified', async () => {
+  const original = (await su(`select verdict_judge, fault_ratio_prosecutor, judged_at from public.court_cases where id = $1`, [caseId])).rows[0];
+  const c1 = await as('service', `select * from public.claim_appeal_for_verdict($1)`, [appealId]);
+  assert.equal(c1.rows[0].status, 'DELIBERATING');
+  assert.equal((await as('service', `select * from public.claim_appeal_for_verdict($1)`, [appealId])).rows.length, 0);
+  await rejects(as('service', `select * from public.complete_appeal_verdict($1, 'j', 'c', 70, 40, 'p')`, [appealId]), /appeal_fault_sum_100/);
+  const verdictsBefore = (await appealCalls('VERDICT_READY')).length;
+  const done = (await as('service', `select * from public.complete_appeal_verdict($1, 'İstinaf hükmü', 'Şerh', 55, 45, 'Ortak çamaşır günü')`, [appealId])).rows[0];
+  assert.equal(done.status, 'JUDGED');
+  assert.equal(await caseStatus(caseId), 'JUDGED');
+  const now = (await su(`select verdict_judge, fault_ratio_prosecutor, judged_at from public.court_cases where id = $1`, [caseId])).rows[0];
+  assert.deepEqual(now, original);
+  const pushes = (await appealCalls('VERDICT_READY')).slice(verdictsBefore).map((b) => b.user_id).sort();
+  assert.deepEqual(pushes, [A, B].sort());
+  assert.equal((await as('service', `select * from public.complete_appeal_verdict($1, 'x', 'y', 50, 50, 'z')`, [appealId])).rows.length, 0);
+});
+
+await test('clients cannot call service-only appeal functions', async () => {
+  for (const sql of [
+    `select * from public.claim_appeal_for_verdict($1)`,
+    `select * from public.complete_appeal_verdict($1, 'a', 'b', 50, 50, 'c')`,
+    `select public.fail_appeal_verdict($1, 'x')`,
+  ]) await rejects(as(A, sql, [appealId]), /permission denied/);
+  await rejects(as(A, `select * from public.list_claimable_appeals(5)`), /permission denied/);
+});
+
+await test('round 2 by the other party: reply timeout, failure retry, then the limit of 2', async () => {
+  const r2 = (await as(A, `select * from public.file_appeal($1, 'İstinaf kararına da itiraz ediyorum.')`, [caseId])).rows[0];
+  assert.equal(r2.round, 2);
+  assert.equal(r2.respondent_id, B);
+  await su(`update public.court_appeals set reply_deadline = now() - interval '1 minute' where id = $1`, [r2.id]);
+  await rejects(as(B, `select * from public.reply_appeal($1, 'Geç kaldım')`, [r2.id]), /REPLY_DEADLINE_PASSED/);
+  const listed = await as('service', `select * from public.list_claimable_appeals(10)`);
+  assert.ok(listed.rows.some((x) => Object.values(x)[0] === r2.id));
+  const claimed = (await as('service', `select * from public.claim_appeal_for_verdict($1)`, [r2.id])).rows[0];
+  assert.equal(claimed.reply_timed_out, true);
+  assert.match(claimed.respondent_reply, /cevap vermemiştir/);
+  await as('service', `select public.fail_appeal_verdict($1, 'Gemini 503')`, [r2.id]);
+  const failed = (await su(`select status, last_error, respondent_reply from public.court_appeals where id = $1`, [r2.id])).rows[0];
+  assert.equal(failed.status, 'AWAITING_REPLY');
+  assert.equal(failed.last_error, 'Gemini 503');
+  assert.match(failed.respondent_reply, /cevap vermemiştir/);
+  await as('service', `select * from public.claim_appeal_for_verdict($1)`, [r2.id]);
+  await as('service', `select * from public.complete_appeal_verdict($1, 'İkinci istinaf', 'Şerh', 50, 50, 'Beraber çamaşır')`, [r2.id]);
+  assert.equal(await caseStatus(caseId), 'JUDGED');
+  await rejects(as(B, `select * from public.file_appeal($1, 'Üçüncü kez itiraz ediyorum.')`, [caseId]), /APPEAL_LIMIT_REACHED/);
+});
+
+await test('12 h window runs from the latest verdict', async () => {
+  // Fresh JUDGED case for D/E, judged 13 h ago.
+  const de = (await as(D, `select * from public.file_case('Kumanda', 'OTHER', 'Kumanda yine ortada yok.')`)).rows[0].id;
+  await as(E, `select * from public.submit_defense($1, 'Ben kullanmadım.')`, [de]);
+  await as('service', `select * from public.claim_case_for_verdict($1)`, [de]);
+  await as('service', `select * from public.complete_verdict($1, 'h', 's', 60, 40, 'p')`, [de]);
+  await su(`update public.court_cases set judged_at = now() - interval '13 hours' where id = $1`, [de]);
+  await rejects(as(E, `select * from public.file_appeal($1, 'Süre geçti ama deniyorum.')`, [de]), /APPEAL_WINDOW_CLOSED/);
+  await su(`update public.court_cases set judged_at = now() - interval '11 hours' where id = $1`, [de]);
+  const a1 = (await as(E, `select * from public.file_appeal($1, 'Süre içinde itiraz ediyorum.')`, [de])).rows[0];
+  await as(D, `select * from public.reply_appeal($1, 'Kumandayı o saklıyor.')`, [a1.id]);
+  await as('service', `select * from public.claim_appeal_for_verdict($1)`, [a1.id]);
+  await as('service', `select * from public.complete_appeal_verdict($1, 'h', 's', 50, 50, 'p')`, [a1.id]);
+  // Round 2's window is measured from round 1's verdict, not the original one.
+  await su(`update public.court_appeals set judged_at = now() - interval '13 hours' where id = $1`, [a1.id]);
+  await rejects(as(D, `select * from public.file_appeal($1, 'İkinci tur, süre geçti.')`, [de]), /APPEAL_WINDOW_CLOSED/);
+  assert.equal((await as(A, `select count(*)::int n from public.court_appeals where case_id = $1`, [de])).rows[0].n, 0);
+});
+
+console.log('Leave couple');
+const SHARED = ['court_cases', 'court_appeals', 'plans', 'delayed_messages', 'pending_questions', 'wheel_options', 'wheel_spins'];
+const sharedCounts = async (cid) => {
+  const out = {};
+  for (const t of SHARED) out[t] = (await su(`select count(*)::int n from public.${t} where couple_id = $1`, [cid])).rows[0].n;
+  return out;
+};
+
+await test('stranger cannot leave anyone’s couple; anon cannot call it', async () => {
+  await rejects(as(C, `select public.leave_couple()`), /NOT_PAIRED/);
+  await rejects(as('anon', `select public.leave_couple()`), /permission denied/);
+});
+
+await test('A leaves: couple + every shared row deleted, personal rows kept, only B notified', async () => {
+  const cid = (await su(`select id from public.couples where user_a_id = $1`, [A])).rows[0].id;
+  const de = (await su(`select id from public.couples where user_a_id = $1`, [D])).rows[0].id;
+  // An unsent cooling-off message must vanish without ever being released.
+  const pending = (await as(B, `select id from public.schedule_delayed_message('Gönderilmeyecek gizli mesaj', 15)`)).rows[0].id;
+  // Already due: if it survived the leave, the release job below would send it.
+  await su(`update public.delayed_messages set created_at = now() - interval '30 minutes', release_at = now() - interval '1 second' where id = $1`, [pending]);
+  const before = await sharedCounts(cid);
+  for (const t of ['court_cases', 'court_appeals', 'plans', 'delayed_messages', 'wheel_options', 'wheel_spins']) {
+    assert.ok(before[t] > 0, `fixture has no ${t}`);
+  }
+  const otherBefore = await sharedCounts(de);
+  const tokens = (await su(`select count(*)::int n from public.push_tokens where user_id in ($1, $2)`, [A, B])).rows[0].n;
+  const calls = (await su(`select coalesce(max(id), 0)::int n from net.calls`)).rows[0].n;
+
+  await as(A, `select public.leave_couple()`);
+
+  assert.equal((await su(`select count(*)::int n from public.couples where id = $1`, [cid])).rows[0].n, 0);
+  assert.deepEqual(await sharedCounts(cid), Object.fromEntries(SHARED.map((t) => [t, 0])));
+  assert.deepEqual(await sharedCounts(de), otherBefore);
+  assert.equal((await su(`select count(*)::int n from public.profiles where id in ($1, $2)`, [A, B])).rows[0].n, 2);
+  assert.equal((await su(`select count(*)::int n from public.push_tokens where user_id in ($1, $2)`, [A, B])).rows[0].n, tokens);
+
+  const sent = await su(`select body from net.calls where id > $1 order by id`, [calls]);
+  assert.deepEqual(sent.rows.map((r) => [r.body.type, r.body.user_id]), [['COUPLE_ENDED', B]]);
+  assert.ok(!JSON.stringify(sent.rows[0].body).includes('gizli'));
+  assert.equal((await as('service', `select public.release_due_messages() n`)).rows[0].n, 0);
+});
+
+await test('after leaving: neither side is paired, B cannot leave twice, nothing visible', async () => {
+  for (const who of [A, B]) {
+    assert.equal((await as(who, `select (public.my_active_couple()).id`)).rows[0].id, null);
+    for (const t of SHARED) assert.equal((await as(who, `select count(*)::int n from public.${t}`)).rows[0].n, 0, `${t} still visible`);
+  }
+  await rejects(as(B, `select public.leave_couple()`), /NOT_PAIRED/);
+  await rejects(as(B, `select * from public.file_case('Yeni dava', 'OTHER', 'Eşleşme yokken dava açılamaz.')`), /NOT_PAIRED/);
+});
+
+await test('both can pair again immediately', async () => {
+  const code = (await as(A, `select * from public.create_pairing_code()`)).rows[0].pairing_code;
+  const r = await as(B, `select * from public.pair_with_code($1)`, [code]);
+  assert.equal(r.rows[0].is_active, true);
+});
+
+console.log('Gemini usage log (D2)');
+const record = (outcome, tokens = 0, status = null, kind = 'case') =>
+  as('service', `select * from public.record_llm_usage($1, 'gemini-test', $2, $3, 1200, $4, 0, 0, $4)`, [kind, outcome, status, tokens]);
+
+await test('usage log has no link to a person, couple, case or text', async () => {
+  const cols = (await su(`select column_name from information_schema.columns
+                          where table_schema = 'private' and table_name = 'llm_usage' order by ordinal_position`)).rows.map((r) => r.column_name);
+  assert.deepEqual(cols, ['id', 'created_at', 'kind', 'model', 'outcome', 'http_status', 'latency_ms',
+    'prompt_tokens', 'output_tokens', 'thought_tokens', 'total_tokens', 'billable']);
+});
+
+await test('service records calls; only billable outcomes count toward the budget', async () => {
+  let r = (await record('ok', 1800, 200)).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('http_error', 0, 503)).rows[0]; // overload: rejected before generation
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('network_error')).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [1, 1800]);
+  r = (await record('timeout', 0, null, 'appeal')).rows[0]; // may have generated: counts
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [2, 1800]);
+  r = (await record('invalid_output', 2200, 200)).rows[0];
+  assert.deepEqual([Number(r.calls_today), Number(r.tokens_today)], [3, 4000]);
+  const today = (await as('service', `select * from public.llm_usage_today()`)).rows[0];
+  assert.deepEqual([Number(today.calls_today), Number(today.tokens_today)], [3, 4000]);
+});
+
+await test('bad input is rejected by the table checks', async () => {
+  await rejects(record('maybe'), /llm_usage_outcome_check/);
+  await rejects(record('ok', -5, 200), /check/);
+  await rejects(record('ok', 1, 200, 'plan'), /llm_usage_kind_check/);
+});
+
+await test('today = UTC day; rows older than 90 days are pruned on the next write', async () => {
+  await su(`insert into private.llm_usage (created_at, kind, model, outcome, latency_ms, total_tokens) values
+            (date_trunc('day', now() at time zone 'UTC') at time zone 'UTC' - interval '1 second', 'case', 'm', 'ok', 1, 99999),
+            (now() - interval '91 days', 'case', 'm', 'ok', 1, 77777)`);
+  const today = (await as('service', `select * from public.llm_usage_today()`)).rows[0];
+  assert.deepEqual([Number(today.calls_today), Number(today.tokens_today)], [3, 4000]); // yesterday excluded
+  await record('ok', 1000, 200);
+  const old = await su(`select count(*)::int n from private.llm_usage where total_tokens = 77777`);
+  assert.equal(old.rows[0].n, 0);
+  const yesterday = await su(`select count(*)::int n from private.llm_usage where total_tokens = 99999`);
+  assert.equal(yesterday.rows[0].n, 1);
+});
+
+await test('clients and anon can neither record, read totals nor touch the table', async () => {
+  for (const who of [A, C, 'anon']) {
+    await rejects(as(who, `select * from public.record_llm_usage('case', 'm', 'ok', 200, 1, 1, 1, 0, 2)`), /permission denied/);
+    await rejects(as(who, `select * from public.llm_usage_today()`), /permission denied/);
+    await rejects(as(who, `select count(*) from private.llm_usage`), /permission denied/);
+  }
+});
+
 console.log('Schedules');
 await test('cron jobs registered', async () => {
   const r = await su(`select name from cron.jobs order by name`);
   assert.deepEqual(r.rows.map((x) => x.name), ['duosync-court-sweep', 'duosync-prune-pairing-attempts', 'duosync-release-messages']);
+});
+
+// supabase/verify/live_check.sql reads the real catalog names; add those on
+// top of the stubs and simulate a correctly configured project.
+console.log('Live check script');
+const liveCheck = readFileSync(join(here, '..', 'verify', 'live_check.sql'), 'utf8');
+await db.exec(`
+create schema supabase_migrations;
+create table supabase_migrations.schema_migrations (version text primary key);
+insert into supabase_migrations.schema_migrations values ('20261008000000'), ('20261008000100'), ('20261031000000'), ('20261031000100'), ('20261102000000'), ('20261108000000');
+create view cron.job as
+  select row_number() over (order by name)::bigint as jobid, name as jobname, schedule, command, true as active
+  from cron.jobs;
+create table cron.job_run_details (jobid bigint, status text, return_message text, start_time timestamptz);
+insert into cron.job_run_details
+  select jobid, 'succeeded', '1 row', now() - interval '30 seconds' from cron.job;
+create table net._http_response (
+  id bigint generated always as identity, status_code int, content text,
+  timed_out bool default false, error_msg text, created timestamptz default now());
+insert into net._http_response (status_code, content) values (202, '{"accepted":true,"task":"sweep"}');
+update vault.decrypted_secrets set decrypted_secret = repeat('ab', 32) where name = 'duosync_internal_secret';
+update vault.decrypted_secrets set decrypted_secret = 'https://abcdefghijklmnopqrst.supabase.co'
+  where name = 'duosync_project_url';
+-- Supabase-managed ("automatic RLS"): definer event trigger fn pinned to pg_catalog.
+create function public.rls_auto_enable() returns event_trigger
+  language plpgsql security definer set search_path = pg_catalog as $$ begin end $$;
+revoke execute on function public.rls_auto_enable() from public, anon, authenticated;
+grant execute on function public.rls_auto_enable() to service_role;
+`);
+// Check 2 (pg_cron/pg_net in pg_extension) cannot pass on PGlite: both are stubbed schemas.
+const failingRows = async () =>
+  (await su(liveCheck)).rows.filter((r) => !r.ok && r.n !== 2).map((r) => `${r.n} ${r.item}: ${r.detail}`);
+
+await test('healthy project: all checks pass', async () => {
+  assert.equal((await su(liveCheck)).rows.length, 14);
+  assert.deepEqual(await failingRows(), []);
+});
+
+await test('misconfigurations are flagged on the right row', async () => {
+  await db.exec(`
+    insert into net._http_response (status_code, content) values (403, '{"error":"FORBIDDEN"}');
+    insert into cron.job_run_details
+      select jobid, 'failed', 'ERROR: boom', now() from cron.job where jobname = 'duosync-court-sweep';
+    update vault.decrypted_secrets set decrypted_secret = 'short' where name = 'duosync_internal_secret';
+    update vault.decrypted_secrets set decrypted_secret = 'https://abc.supabase.co/functions/v1'
+      where name = 'duosync_project_url';
+    create table public.leaky (id int);
+    grant execute on function public.release_due_messages() to authenticated;
+    revoke select on public.court_cases from service_role;
+    create function public.unpinned_definer() returns int
+      language sql security definer as $$ select 1 $$;
+    create function public.unpinned_event_fn() returns event_trigger
+      language plpgsql security definer as $$ begin end $$;
+  `);
+  const rows = await failingRows();
+  // 11 too: new functions are executable by PUBLIC (hence anon) unless revoked.
+  assert.deepEqual(rows.map((s) => Number(s.split(' ')[0])), [4, 6, 7, 8, 9, 11, 12, 13, 14]);
+  const row13 = rows.find((s) => s.startsWith('13 '));
+  assert.match(row13, /public\.unpinned_definer/);
+  assert.match(row13, /public\.unpinned_event_fn/);
+  assert.doesNotMatch(row13, /rls_auto_enable/);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

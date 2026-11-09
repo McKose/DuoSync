@@ -1,6 +1,6 @@
 # DuoSync
 
-İki partner arasında kapalı devre (strictly 1-to-1) çalışan ilişki asistanı: AI Mahkemesi, Canlı Masa (ortak ajanda + checklist), Soğuma Odası, Soru Kasası ve pasif pil/durum senkronu.
+İki partner arasında kapalı devre (strictly 1-to-1) çalışan ilişki asistanı: AI Mahkemesi, Canlı Masa (ortak ajanda + checklist + "Ne yesek?" karar çarkı), Soğuma Odası, Soru Kasası ve pasif pil/durum senkronu.
 
 | Katman | Teknoloji |
 |---|---|
@@ -8,7 +8,7 @@
 | Stil | NativeWind 4.2 (Tailwind 3) |
 | State | Zustand (kimlik/çift) + TanStack Query v5 (sunucu verisi, offline persist) |
 | Backend | Supabase: Postgres + RLS, Realtime, Edge Functions (Deno), pg_cron, pg_net, Vault |
-| AI | Gemini Flash (`gemini-3.8-flash` varsayılan, `GEMINI_MODEL` ile değiştirilebilir) — structured JSON |
+| AI | Gemini Flash-Lite (`gemini-3.5-flash-lite` varsayılan, `GEMINI_MODEL` ile değiştirilebilir; `gemini-3.8-flash` canlıda sürekli 503 verdi, ROADMAP A3) — structured JSON |
 
 ---
 
@@ -44,16 +44,19 @@ npm run demo -- --web   # ya da tarayıcıda aç
 
 > Demo modu yalnızca geliştirme/test içindir; veriler şifrelenmeden cihazda durur ve iki gerçek kişiyi eşleştirmez.
 
-## Android APK (demo)
+## Android APK
 
-Veritabanısız demo sürümünün telefona kurulabilen APK'sı GitHub Actions'ta derlenir (`.github/workflows/android-apk.yml`).
+Telefona kurulabilen APK'lar GitHub Actions'ta derlenir (`.github/workflows/android-apk.yml`). İki çeşit vardır:
+**canlı** (gerçek Supabase projesine bağlı) ve **demo** (veritabanısız). Paket adları aynı olduğu için bir telefonda
+ikisinden yalnızca biri durabilir.
 
-**Yeni APK derletmek** (üçünden biri):
-- GitHub → **Actions** → **Android APK (demo)** → **Run workflow**
-- `git push origin main:apk-build`
-- `v*` etiketi push'la (ör. `v0.1.0-demo`). APK, bir GitHub Release'e de eklenir.
+**Yeni APK derletmek:**
+- `git push origin main:apk-build` → yalnızca **canlı** APK.
+- GitHub → **Actions** → **Android APK** → **Run workflow** → `live` / `demo` / `both`.
+- `v*` etiketi push'la (ör. `v0.1.0`) → ikisi de; demo APK bir GitHub Release'e de eklenir.
+- Canlı APK değişkenleri (aşağıda) tanımlı değilse bunların yerine demo derlenir ve uyarı yazılır.
 
-**İndirmek:** İlgili çalıştırmanın sayfasında, en altta **Artifacts → duosync-demo-apk**. Zip'ten `DuoSync-demo-….apk` çıkar. Derleme ~15 dk sürer; artifact 30 gün saklanır.
+**İndirmek:** İlgili çalıştırmanın sayfasında, en altta **Artifacts → duosync-live-apk** (veya `duosync-demo-apk`). Zip'ten `DuoSync-<live|demo>-….apk` çıkar. Derleme ~13 dk sürer; artifact 30 gün saklanır.
 
 **Kurmak:** APK'yı telefona at, aç, **"Bilinmeyen kaynaklardan yüklemeye izin ver"** de.
 - arm64-v8a ve armeabi-v7a içerir, yani pratikte tüm telefonlarda çalışır. x86 emülatörlerde çalışmaz.
@@ -67,10 +70,12 @@ npm install
 cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ```
 
+**APK (GitHub Actions, ücretsiz):** `apk-build` dalına push → "Android APK" workflow'u canlı APK'yı üretir (demo yalnızca elle ya da etiketle, bkz. §Android APK). Canlı APK için repoda (Settings → Secrets and variables → Actions → **Variables**) `DUOSYNC_SUPABASE_URL` ve `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` tanımlı olmalı; ikisi de herkese açık değerlerdir (uygulamaya gömülür, koruma RLS'tedir) ama depoya yazılmaz. Opsiyonel `DUOSYNC_EAS_PROJECT_ID` push kaydını açar (EAS + FCM kurulumu gerekir). Workflow eksik/yanlış değerle "canlı" adı altında demo APK üretmez, hata verir.
+
 ### 2. Supabase
 ```bash
 npx supabase link --project-ref <ref>
-npx supabase db push                          # iki migration
+npx supabase db push                          # altı migration
 
 # Vault (SQL editöründe, bir kez — git'e girmesin diye migration'da değil):
 #   select vault.create_secret('https://<ref>.supabase.co', 'duosync_project_url');
@@ -79,12 +84,23 @@ npx supabase db push                          # iki migration
 npx supabase secrets set \
   GEMINI_API_KEY=<key> \
   INTERNAL_WEBHOOK_SECRET=<vault'takiyle aynı dize> \
-  GEMINI_MODEL=gemini-3.8-flash           # opsiyonel
+  GEMINI_MODEL=gemini-3.5-flash-lite      # opsiyonel (varsayılan bu)
+# GEMINI_DAILY_CALL_LIMIT=150             # opsiyonel: günlük (UTC) model çağrısı tavanı
+# GEMINI_DAILY_TOKEN_LIMIT=300000         # opsiyonel: günlük token tavanı
+# USAGE_ALERT_USER_ID=<profil uuid>       # opsiyonel: %80 / %100'de bu kullanıcıya push
 # EXPO_ACCESS_TOKEN=<token>               # opsiyonel: Expo "enhanced push security"
 
 npx supabase functions deploy ai-court-verdict send-push-notification
 ```
 `supabase/config.toml` iki fonksiyon için `verify_jwt = false` ayarlar; kimlik doğrulama fonksiyon içinde yapılır (pg_net/pg_cron çağrıları kullanıcı JWT'si taşımaz).
+
+`duosync_internal_secret` için `openssl rand -hex 32` yeterli; aynı dize `INTERNAL_WEBHOOK_SECRET` olarak da girilmeli.
+
+Sunucu anahtarı elle girilmez: Supabase fonksiyonlara `SUPABASE_SECRET_KEYS` (yeni `sb_secret_…` anahtarı, `default`) ve eski projelerde `SUPABASE_SERVICE_ROLE_KEY` enjekte eder. `_shared/http.ts` → `serviceKey()` önce yenisini, yoksa eskisini kullanır (eski JWT anahtarları 2026 sonunda kapanıyor).
+
+**Maliyet ve kota (D2):** Her Gemini çağrısı `private.llm_usage`'a yazılır (model, sonuç, süre, token; dava/kişi/metin yok). Fonksiyon bir davayı üstlenmeden önce günün (UTC) kullanımına bakar: çağrı ya da token tavanı dolduysa davayı üstlenmez, deneme hakkı yemez, ertesi gün ilk taramada karara bağlanır. %80 ve %100'de log'a uyarı düşer, `USAGE_ALERT_USER_ID` verilmişse o kullanıcıya push gider. Rapor: `supabase/verify/usage_report.sql` (SQL editörü, son 14 gün). Google tarafında sıfır maliyetin asıl güvencesi anahtarın **ücretsiz katmanda** olması (AI Studio'da faturalandırma bağlı değil); uygulamadaki tavan ikinci emniyettir ve ücretsiz kotanın gün ortasında tükenmesini de önler.
+
+**Kurulum doğrulaması:** deploy'dan ≥ 10 dk sonra (mahkeme süpürmesi bir kez çalışmış olsun) `supabase/verify/live_check.sql` dosyasını SQL editöründe çalıştırın; 14 satırın hepsi `ok = true` olmalı. Satır 8 (webhook gidiş-dönüş) hatalıysa detay sütunu nedeni söyler: 401 = gateway JWT doğrulaması açık, 403 = iki secret farklı, 404 = fonksiyon deploy edilmemiş veya proje URL'si yanlış. Fonksiyonların `ACTIVE` olduğunu `npx supabase functions list` ile kontrol edin.
 
 ### 3. Push bildirimleri
 ```bash
@@ -106,10 +122,10 @@ npx expo start --dev-client
 |---|---|---|
 | `npm run lint` | ESLint (`eslint-config-expo` + react-hooks kuralları, `exhaustive-deps` hata seviyesinde) | ✅ 0 bulgu |
 | `npm run typecheck` | Tüm istemci kodu, `database.types.ts` ile RPC/tablo tipleri | ✅ 0 hata |
-| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 43/43 |
-| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, hata kodları) | ✅ 20/20 |
-| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → dava/savunma/karar → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı | ✅ 11/11, 0 tarayıcı hatası |
-| `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti | ✅ 7/7 |
+| `npm run test:db` | Migration'lar + RLS + iş kuralları + çiftler arası izolasyon, PGlite (WASM Postgres) üzerinde, Supabase rolleri/auth/vault/pg_net/pg_cron stub'lanarak | ✅ 65/65 |
+| `npm run test:demo` | Demo backend sözleşmesi: sunucu kurallarının birebir taklit edildiği (savunma kilidi, sessiz iptal, LWW, karar çarkı, istinaf, eşleşmeyi bozma, hata kodları) + çark geometrisi | ✅ 31/31 |
+| `tests/e2e` (CI) | Demo web build'i headless Chromium'da: kayıt → eşleşme → plan → karar çarkı (ben + partner çevirir) → dava/savunma/karar → istinaf → soğuma iptali → kasa → partner sessiz iptali → çevrimdışı → eşleşmeyi bozma | ✅ 14/14, 0 tarayıcı hatası |
+| `npm run test:functions` | Verdict doğrulama, kusur normalizasyonu, prompt-injection çiti (istinaf prompt'u dahil) | ✅ 8/8 |
 | `npx expo export --platform android` | Metro + NativeWind + Reanimated 4 + Hermes bundle | ✅ 4.1 MB `.hbc` |
 
 CI (`.github/workflows/ci.yml`) bu kontrolleri her push ve PR'da çalıştırır.
@@ -148,6 +164,9 @@ Client (Expo)                         Supabase
 | Sessiz iptal | Alıcının SELECT politikası yalnız `status='SENT'`. PENDING→CANCELLED alıcı için görünmez satırdan görünmez satıra geçiş → Realtime olayı da yok. Push trigger'ı sadece PENDING→SENT'te | ✅ (push kuyruğu sayısı değişmiyor) |
 | Pasif pil | `AppState` background/inactive→active geçişinde tek okuma + throttle (2 dk / %5). Arka plan görevi, listener, polling yok | — |
 | Offline checklist | İstemci UUID'li öğeler, öğe başına LWW (`updated_at`), sunucuda satır kilitli atomik merge, saat kayması koruması (+1 dk tavan), tombstone silme; TanStack paused mutation + AsyncStorage persist ile yeniden başlatmaya dayanıklı | ✅ |
+| Karar çarkı | Sonucu `spin_wheel()` (SECURITY DEFINER) `gen_random_uuid()` ile seçer ve seçenek listesinin anlık görüntüsüyle birlikte saklar; istemci yalnız okur ve animasyonla o satıra döner. Duruş noktası spin id'sinden türetilir → iki telefonda aynı yer. Çift başına 10 sn bekleme, en çok 12 seçenek, büyük/küçük harf duyarsız tekrar engeli; `CHECK` ile sonuç = anlık görüntüdeki etiket | ✅ |
+| İstinaf | Son karardan sonra 12 saat içinde iki taraf da itiraz edebilir, dava başına en çok 2 tur. Karşı taraf 12 saat içinde cevap verir; `claim_appeal_for_verdict()` cevap yoksa ve süre dolmadıysa **boş set** döner (savunma kilidinin ikizi). İlk derece kararı `court_cases`'te değişmeden kalır, her tur kendi kararını saklar; geçerli olan son karardır | ✅ |
+| Eşleşmeyi bozma | `leave_couple()` çift satırını kilitleyip siler; cascade ile davalar, planlar, mesajlar (gönderilmemişler dahil, push'suz), sorular ve çark silinir. Profil ve push token kalır, iki taraf hemen yeniden eşleşebilir. Partnere içeriksiz bir push gider; iki cihaz da önbellekteki ortak veriyi ve kuyruktaki düzenlemeleri atar | ✅ |
 
 ---
 
@@ -171,9 +190,8 @@ Client (Expo)                         Supabase
 
 ## Kapsam dışı bırakılanlar
 
-- **İstinaf (`APPEALED`)**: enum'da duruyor, akış tanımlanmadığı için UI/RPC yok.
-- **Karar çarkı ("Ne yesek?")** ve **sessiz modu aşan acil alarm**: proje açıklamasında var, spec'te yok. Acil alarm iOS'ta Apple'ın *Critical Alerts* entitlement onayı, Android'de `USE_FULL_SCREEN_INTENT`/DND erişimi gerektirir — ayrı bir iş kalemi.
-- **Ayrılma / eşleşmeyi bozma** akışı.
+- **Sessiz modu aşan acil alarm**: proje açıklamasında var, spec'te yok. iOS'ta Apple'ın *Critical Alerts* entitlement onayı, Android'de `USE_FULL_SCREEN_INTENT`/DND erişimi gerektirir — ayrı bir iş kalemi (ROADMAP C2). Karar çarkı 2026-10-31'de eklendi (C1).
+- **Hesap silme** (B1): kişisel kullanım kararıyla ertelendi. Eşleşmeyi bozma 2026-10-31'de eklendi (B2).
 
 ## Bilinen riskler
 
@@ -181,7 +199,8 @@ Client (Expo)                         Supabase
 |---|---|---|
 | NativeWind 4.2 + Reanimated 4 + RN 0.86 | Bundle derleniyor, ancak cihazda çalışma doğrulanmadı | İlk dev build'de tüm ekranları gez; sorun olursa NativeWind 5 RC veya StyleSheet |
 | Soğuma odası gecikmesi | pg_cron 1 dk çözünürlük → mesaj en geç ~60 sn geç düşer | Kabul edilebilir; daha sıkı gerekiyorsa Supabase Queues |
-| AsyncStorage'da oturum | Root'lu cihazda token okunabilir | SecureStore 2 KB limitine takılır; gerekirse AES anahtarı SecureStore'da + şifreli AsyncStorage deseni |
+| Cihazda oturum ve önbellek | Root'lu cihazda token, dilekçe, karar ve mesajlar okunabilirdi | **Giderildi (B4):** oturum ve kalıcı sorgu önbelleği AsyncStorage'da AES-256-GCM ile şifreli; anahtar SecureStore'da (Android Keystore), yedeğe/yeni cihaza taşınmaz; kayıt adı AAD ile bağlı. Çözülemeyen kayıt silinir → yeniden giriş. `expo-crypto` + `expo-secure-store` (Expo SDK, ücretsiz). Web (yalnız demo/E2E) şifresiz kalır: orada anahtarı koruyacak keystore yok |
 | Pil verisi tazeliği | Partner uygulamayı açmazsa veri bayatlar | UI "son görülme" gösterir, 6 saatten eski veriyi soluk çizer |
 | Tek cihaz / kullanıcı | `push_tokens` PK = `user_id` | Çoklu cihaz gerekirse PK'yı `(user_id, token)` yap |
-| LLM maliyeti | Kötüye kullanım | Davacı başına 24 saatte 5 dava; claim başına en çok 2 çağrı, dava başına toplam 5 deneme |
+| LLM maliyeti | Kötüye kullanım | Davacı başına 24 saatte 5 dava; dava başına en çok 2 istinaf; claim başına en çok 2 çağrı, dava/tur başına toplam 5 deneme |
+| Eşleşme bozulurken Realtime DELETE | Supabase DELETE olaylarını RLS'e göre süzmez: partner, görmediği (gönderilmemiş/iptal) mesajlar için de yalnız birincil anahtar içeren DELETE çerçeveleri alır; içerik sızmaz | Kullanıcı kararıyla kabul edildi (2026-11-02); A5'te WS trafiği ölçülecek, gerekirse Broadcast'a geçilir |

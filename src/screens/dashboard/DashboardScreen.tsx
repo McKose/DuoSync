@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { signOut } from '@/api/auth';
-import { coupleSides, fetchCoupleProfiles, updatePresence } from '@/api/couple';
+import { coupleSides, fetchCoupleProfiles, leaveCouple, updatePresence } from '@/api/couple';
 import { qk } from '@/api/keys';
 import { AppButton } from '@/components/common/AppButton';
 import { Screen } from '@/components/common/Screen';
@@ -14,6 +14,7 @@ import { PartnerStatusCard, STATUS_META } from '@/components/dashboard/PartnerSt
 import { PlanCard } from '@/components/dashboard/PlanCard';
 import { useNow } from '@/hooks/useNow';
 import { useCreatePlan, usePlans } from '@/hooks/usePlans';
+import { confirmAction } from '@/lib/confirm';
 import { planDatePresets } from '@/lib/time';
 import type { RootStackParamList } from '@/navigation/types';
 import { usePairedContext } from '@/store/useCoupleStore';
@@ -39,6 +40,21 @@ export function DashboardScreen() {
     mutationFn: (status: PartnerStatus) => updatePresence({ status }),
     onSuccess: (row) => queryClient.setQueryData(qk.couple(userId), row),
   });
+
+  // Server deletes the couple and all shared rows; refetching the couple flips
+  // the session to "unpaired", which also drops this device's cached copies.
+  const leave = useMutation({
+    mutationFn: leaveCouple,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.couple(userId) }),
+  });
+  const confirmLeave = () =>
+    confirmAction({
+      title: 'Eşleşmeyi sonlandır',
+      message: `${partnerName} ile eşleşmen sona erecek. Davalar, planlar, mesajlar, sorular ve çark ikiniz için de kalıcı olarak silinir. Bu işlem geri alınamaz.`,
+      confirmLabel: 'Evet, sil',
+      destructive: true,
+      onConfirm: () => leave.mutate(),
+    });
 
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState('');
@@ -118,6 +134,20 @@ export function DashboardScreen() {
         ) : null}
       </Card>
 
+      <Pressable
+        onPress={() => nav.navigate('DecisionWheel')}
+        accessibilityRole="button"
+        accessibilityHint="Karar çarkını açar"
+        className="flex-row items-center rounded-xl2 bg-amber-soft p-4 active:opacity-80"
+      >
+        <Text className="mr-3 text-3xl">🎡</Text>
+        <View className="flex-1">
+          <Text className="text-base font-semibold text-ink">Ne yesek?</Text>
+          <Text className="text-xs text-ink-soft">Karar çarkı: sonucu sunucu seçer, tartışma biter.</Text>
+        </View>
+        <Text className="text-lg text-ink-mute">›</Text>
+      </Pressable>
+
       <View className="mt-5 flex-row items-center justify-between">
         <Text className="text-xs font-bold uppercase tracking-wider text-ink-mute">Planlar</Text>
         <Pressable onPress={toggleForm} accessibilityRole="button" hitSlop={8}>
@@ -162,6 +192,15 @@ export function DashboardScreen() {
             ))}
         </>
       ) : null}
+
+      <SectionTitle>Eşleşme</SectionTitle>
+      <Card>
+        <Text className="mb-3 text-sm text-ink-soft">
+          Sonlandırırsan ortak verilerinizin tamamı ikiniz için de silinir; ikiniz de yeniden eşleşebilirsiniz.
+        </Text>
+        <ErrorBanner error={leave.error} />
+        <AppButton label="Eşleşmeyi sonlandır" variant="danger" loading={leave.isPending} onPress={confirmLeave} />
+      </Card>
     </Screen>
   );
 }

@@ -85,6 +85,49 @@ type PlanRow = {
   updated_at: string;
 };
 
+type CourtAppealRow = {
+  id: string;
+  case_id: string;
+  couple_id: string;
+  round: number;
+  appellant_id: string;
+  respondent_id: string;
+  appellant_reason: string;
+  respondent_reply: string | null;
+  reply_timed_out: boolean;
+  reply_deadline: string;
+  replied_at: string | null;
+  status: Database['public']['Enums']['appeal_status'];
+  verdict_judge: string | null;
+  verdict_comedian: string | null;
+  penalty: string | null;
+  fault_ratio_prosecutor: number | null;
+  fault_ratio_defendant: number | null;
+  deliberation_started_at: string | null;
+  verdict_attempts: number;
+  last_error: string | null;
+  created_at: string;
+  judged_at: string | null;
+};
+
+type WheelOptionRow = {
+  id: string;
+  couple_id: string;
+  created_by: string | null;
+  label: string;
+  created_at: string;
+};
+
+type WheelSpinRow = {
+  id: string;
+  couple_id: string;
+  spun_by: string | null;
+  option_labels: Json;
+  result_index: number;
+  result_label: string;
+  created_at: string;
+};
+
 export type Database = {
   // Allows to automatically instantiate createClient with right options
   __InternalSupabase: {
@@ -297,6 +340,85 @@ export type Database = {
           },
         ];
       };
+      court_appeals: {
+        Row: CourtAppealRow;
+        Insert: {
+          id?: string;
+          case_id: string;
+          couple_id: string;
+          round: number;
+          appellant_id: string;
+          respondent_id: string;
+          appellant_reason: string;
+          respondent_reply?: string | null;
+          reply_timed_out?: boolean;
+          reply_deadline: string;
+          replied_at?: string | null;
+          status?: Database['public']['Enums']['appeal_status'];
+          verdict_judge?: string | null;
+          verdict_comedian?: string | null;
+          penalty?: string | null;
+          fault_ratio_prosecutor?: number | null;
+          fault_ratio_defendant?: number | null;
+          deliberation_started_at?: string | null;
+          verdict_attempts?: number;
+          last_error?: string | null;
+          created_at?: string;
+          judged_at?: string | null;
+        };
+        Update: Partial<CourtAppealRow>;
+        Relationships: [
+          {
+            foreignKeyName: 'court_appeals_case_id_couple_id_fkey';
+            columns: ['case_id', 'couple_id'];
+            isOneToOne: false;
+            referencedRelation: 'court_cases';
+            referencedColumns: ['id', 'couple_id'];
+          },
+        ];
+      };
+      wheel_options: {
+        Row: WheelOptionRow;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          created_by?: string | null;
+          label: string;
+          created_at?: string;
+        };
+        Update: Partial<WheelOptionRow>;
+        Relationships: [
+          {
+            foreignKeyName: 'wheel_options_couple_id_fkey';
+            columns: ['couple_id'];
+            isOneToOne: false;
+            referencedRelation: 'couples';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      wheel_spins: {
+        Row: WheelSpinRow;
+        Insert: {
+          id?: string;
+          couple_id: string;
+          spun_by?: string | null;
+          option_labels: Json;
+          result_index: number;
+          result_label: string;
+          created_at?: string;
+        };
+        Update: Partial<WheelSpinRow>;
+        Relationships: [
+          {
+            foreignKeyName: 'wheel_spins_couple_id_fkey';
+            columns: ['couple_id'];
+            isOneToOne: false;
+            referencedRelation: 'couples';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -378,10 +500,52 @@ export type Database = {
         Returns: PlanRow;
         SetofOptions: { from: '*'; to: 'plans'; isOneToOne: true; isSetofReturn: false };
       };
+      add_wheel_option: {
+        Args: { p_label: string };
+        Returns: WheelOptionRow;
+        SetofOptions: { from: '*'; to: 'wheel_options'; isOneToOne: true; isSetofReturn: false };
+      };
+      remove_wheel_option: { Args: { p_option_id: string }; Returns: undefined };
+      leave_couple: { Args: never; Returns: undefined };
+      file_appeal: {
+        Args: { p_case_id: string; p_reason: string };
+        Returns: CourtAppealRow;
+        SetofOptions: { from: '*'; to: 'court_appeals'; isOneToOne: true; isSetofReturn: false };
+      };
+      reply_appeal: {
+        Args: { p_appeal_id: string; p_reply: string };
+        Returns: CourtAppealRow;
+        SetofOptions: { from: '*'; to: 'court_appeals'; isOneToOne: true; isSetofReturn: false };
+      };
+      claim_appeal_for_verdict: {
+        Args: { p_appeal_id: string };
+        Returns: CourtAppealRow[];
+        SetofOptions: { from: '*'; to: 'court_appeals'; isOneToOne: false; isSetofReturn: true };
+      };
+      complete_appeal_verdict: {
+        Args: {
+          p_appeal_id: string;
+          p_verdict_judge: string;
+          p_verdict_comedian: string;
+          p_fault_prosecutor: number;
+          p_fault_defendant: number;
+          p_penalty: string;
+        };
+        Returns: CourtAppealRow[];
+        SetofOptions: { from: '*'; to: 'court_appeals'; isOneToOne: false; isSetofReturn: true };
+      };
+      fail_appeal_verdict: { Args: { p_appeal_id: string; p_error: string }; Returns: undefined };
+      list_claimable_appeals: { Args: { p_limit?: number }; Returns: string[] };
+      spin_wheel: {
+        Args: never;
+        Returns: WheelSpinRow;
+        SetofOptions: { from: '*'; to: 'wheel_spins'; isOneToOne: true; isSetofReturn: false };
+      };
       generate_pairing_code: { Args: never; Returns: string };
     };
     Enums: {
       case_status: 'AWAITING_DEFENSE' | 'DELIBERATING' | 'JUDGED' | 'APPEALED';
+      appeal_status: 'AWAITING_REPLY' | 'DELIBERATING' | 'JUDGED';
       message_status: 'PENDING' | 'SENT' | 'CANCELLED';
       partner_status: 'NORMAL' | 'BUSY' | 'LOW_BATTERY' | 'FRAGILE';
     };
@@ -404,10 +568,14 @@ export type Enums<T extends keyof PublicSchema['Enums']> = PublicSchema['Enums']
 export type Profile = Tables<'profiles'>;
 export type Couple = Tables<'couples'>;
 export type CourtCase = Tables<'court_cases'>;
+export type CourtAppeal = Tables<'court_appeals'>;
 export type DelayedMessage = Tables<'delayed_messages'>;
 export type PendingQuestion = Tables<'pending_questions'>;
 export type Plan = Tables<'plans'>;
+export type WheelOption = Tables<'wheel_options'>;
+export type WheelSpin = Tables<'wheel_spins'>;
 export type CaseStatus = Enums<'case_status'>;
+export type AppealStatus = Enums<'appeal_status'>;
 export type MessageStatus = Enums<'message_status'>;
 export type PartnerStatus = Enums<'partner_status'>;
 

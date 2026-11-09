@@ -15,6 +15,7 @@ export type RootStackParamList = {
   // paired
   Tabs: NavigatorScreenParams<TabParamList> | undefined;
   PlanDetail: { planId: string };
+  DecisionWheel: undefined;
   NewCase: undefined;
   Verdict: { caseId: string };
   // demo mode only

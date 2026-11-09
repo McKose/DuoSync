@@ -6,7 +6,7 @@ import { AppButton } from '@/components/common/AppButton';
 import { Screen } from '@/components/common/Screen';
 import { EmptyState, ErrorBanner, LoadingView, SectionTitle } from '@/components/common/StateViews';
 import { CaseCard } from '@/components/court/CaseCard';
-import { useCases } from '@/hooks/useCourt';
+import { useAppeals, useCases } from '@/hooks/useCourt';
 import { useNow } from '@/hooks/useNow';
 import type { RootStackParamList } from '@/navigation/types';
 import { usePairedContext } from '@/store/useCoupleStore';
@@ -15,7 +15,9 @@ export function CourtHomeScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { userId, coupleId } = usePairedContext();
   const cases = useCases(coupleId);
+  const appeals = useAppeals(coupleId);
   const now = useNow(1000);
+  const appealRows = appeals.data ?? [];
 
   const { open, closed } = useMemo(() => {
     const list = cases.data ?? [];
@@ -34,6 +36,7 @@ export function CourtHomeScreen() {
     >
       <AppButton label="⚖️  Dava aç" variant="court" onPress={() => nav.navigate('NewCase')} />
       <ErrorBanner error={cases.error} onRetry={() => void cases.refetch()} />
+      <ErrorBanner error={appeals.error} onRetry={() => void appeals.refetch()} />
 
       {cases.isPending ? (
         <LoadingView />
@@ -46,11 +49,11 @@ export function CourtHomeScreen() {
         <>
           {open.length > 0 ? <SectionTitle>Açık dosyalar</SectionTitle> : null}
           {open.map((c) => (
-            <CaseCard key={c.id} item={c} userId={userId} now={now} onPress={() => nav.navigate('Verdict', { caseId: c.id })} />
+            <CaseCard key={c.id} item={c} appeals={appealRows} userId={userId} now={now} onPress={() => nav.navigate('Verdict', { caseId: c.id })} />
           ))}
           {closed.length > 0 ? <SectionTitle>Karara bağlananlar</SectionTitle> : null}
           {closed.map((c) => (
-            <CaseCard key={c.id} item={c} userId={userId} now={now} onPress={() => nav.navigate('Verdict', { caseId: c.id })} />
+            <CaseCard key={c.id} item={c} appeals={appealRows} userId={userId} now={now} onPress={() => nav.navigate('Verdict', { caseId: c.id })} />
           ))}
         </>
       )}

@@ -80,6 +80,7 @@ function routeFromNotification(data: Record<string, unknown> | undefined) {
   switch (data.type) {
     case 'CASE_FILED':
     case 'VERDICT_READY':
+    case 'APPEAL_FILED':
       if (caseId) navigationRef.navigate('Verdict', { caseId });
       break;
     case 'MESSAGE_RELEASED':

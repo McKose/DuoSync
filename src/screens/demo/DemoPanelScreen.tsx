@@ -54,6 +54,7 @@ export function DemoPanelScreen() {
   const partnerActions: Action[] = [
     { label: `${DEMO_PARTNER_NAME} dava açsın`, hint: 'Mahkeme sekmesinde rozet çıkar', run: demo.panel.partnerFilesCase },
     { label: 'Savunma sürelerimi doldur', hint: 'Sweep 1 sn içinde savunmasız karar verir', run: demo.panel.expireMyDefenses },
+    { label: `${DEMO_PARTNER_NAME} karara itiraz etsin`, hint: 'Son karara; cevabın için 12 sa (hızlı modda 12 dk)', run: demo.panel.partnerAppeals },
     { label: `${DEMO_PARTNER_NAME} soğuma mesajı yazsın`, hint: '15 dk sonra (hızlı modda 15 sn) gelir', run: demo.panel.partnerSendsMessage },
     {
       label: `${DEMO_PARTNER_NAME} bekleyen mesajını geri çeksin`,
@@ -62,6 +63,8 @@ export function DemoPanelScreen() {
     },
     { label: `${DEMO_PARTNER_NAME} soru sorsun`, hint: 'Kasa sekmesi', run: demo.panel.partnerAsksQuestion },
     { label: `${DEMO_PARTNER_NAME} ilk maddeyi işaretlesin`, hint: 'Açık plan ekranında anlık değişmeli', run: demo.panel.partnerTogglesFirstItem },
+    { label: `${DEMO_PARTNER_NAME} çarkı çevirsin`, hint: 'Açık çark ekranı aynı sonuca dönmeli', run: demo.panel.partnerSpinsWheel },
+    { label: `${DEMO_PARTNER_NAME} eşleşmeyi bitirsin`, hint: 'Ortak veriler silinir, eşleşme ekranına dönersin', run: demo.panel.partnerLeaves },
   ];
 
   const presenceActions: Action[] = [

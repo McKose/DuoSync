@@ -27,10 +27,12 @@
         {
           "color": "#C8475B"
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "lang": "tr"
     }
   }
 }

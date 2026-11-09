@@ -28,6 +28,12 @@ export async function fetchCoupleProfiles(): Promise<Profile[]> {
   return unwrap(await supabase.from('profiles').select('*'));
 }
 
+/** Ends the couple for both partners; the server deletes every shared row (B2). */
+export async function leaveCouple(): Promise<void> {
+  if (IS_DEMO) return demo.leaveCouple();
+  unwrap(await supabase.rpc('leave_couple'));
+}
+
 export async function createPairingCode(): Promise<Couple> {
   if (IS_DEMO) return demo.createPairingCode();
   return unwrap(await supabase.rpc('create_pairing_code'));

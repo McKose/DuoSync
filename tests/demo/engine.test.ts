@@ -7,8 +7,10 @@ import { describe, test } from 'node:test';
 import { createDemoBackend, DEMO_ME_ID, DEMO_PARTNER_ID, PARTNER_DELAYS } from '../../src/demo/engine';
 import { demoVerdict } from '../../src/demo/judge';
 import { errorCode, isNetworkError } from '../../src/lib/errors';
+import { restingAngle, segmentAt, spinTarget, WHEEL_COOLDOWN_MS } from '../../src/lib/wheel';
+import { appealView } from '../../src/lib/appeals';
 
-function setup() {
+function setup(random?: () => number) {
   const mem = new Map<string, string>();
   let clock = Date.parse('2026-10-09T10:00:00Z');
   const be = createDemoBackend({
@@ -20,6 +22,7 @@ function setup() {
     uuid: randomUUID,
     now: () => clock,
     sleep: async () => undefined,
+    random,
   });
   const advance = async (ms: number) => {
     clock += ms;
@@ -28,8 +31,8 @@ function setup() {
   return { be, mem, advance, now: () => clock };
 }
 
-async function paired() {
-  const s = setup();
+async function paired(random?: () => number) {
+  const s = setup(random);
   await s.be.signUp('ayse@example.com', 'secret123', 'Ayşe');
   await s.be.pairWithCode('K7M2QX');
   const couple = (await s.be.fetchMyCouple(DEMO_ME_ID))!;
@@ -149,6 +152,98 @@ describe('court', () => {
   });
 });
 
+describe('appeals (istinaf)', () => {
+  const REASON = 'Çamaşır emeğim hiç hesaba katılmadı.';
+  // At the default 60× demo scale, 12 "hours" last 12 real minutes.
+  const TWELVE_H = 12 * 60_000;
+
+  async function judgedCase() {
+    const s = await paired();
+    const c = await s.be.fileCase({ title: 'Kumanda', category: 'OTHER', plea: 'Kumanda yine kayıp, aramaktan yoruldum.' });
+    await s.advance(PARTNER_DELAYS.defend);
+    await s.advance(PARTNER_DELAYS.judge);
+    assert.equal((await s.be.getCase(c.id)).status, 'JUDGED');
+    return { ...s, caseId: c.id };
+  }
+
+  test('round 1: rules mirror file_appeal; partner replies; verdict lands, original kept', async () => {
+    const { be, couple, advance, caseId } = await judgedCase();
+    const seeded = (await be.listCases(couple.id)).find((c) => c.title === 'Bulaşık makinesi boşaltılmadı')!;
+    assert.equal(await codeOf(be.fileAppeal(seeded.id, REASON)), 'APPEAL_WINDOW_CLOSED');
+    const open = (await be.listCases(couple.id)).find((c) => c.status === 'AWAITING_DEFENSE')!;
+    assert.equal(await codeOf(be.fileAppeal(open.id, REASON)), 'APPEAL_NOT_ALLOWED');
+    assert.match(await codeOf(be.fileAppeal(caseId, 'kısa')), /check constraint/);
+
+    const original = await be.getCase(caseId);
+    const a = await be.fileAppeal(caseId, REASON);
+    assert.equal(a.round, 1);
+    assert.equal(a.respondent_id, DEMO_PARTNER_ID);
+    assert.equal((await be.getCase(caseId)).status, 'APPEALED');
+    assert.equal(await codeOf(be.fileAppeal(caseId, REASON)), 'APPEAL_PENDING');
+    assert.equal(await codeOf(be.replyAppeal(a.id, 'kendime')), 'NOT_RESPONDENT');
+    assert.equal(await be.requestAppealVerdict(a.id), 'already_handled'); // reply lock
+
+    await advance(PARTNER_DELAYS.defend);
+    assert.equal((await be.listAppeals(couple.id))[0]!.status, 'DELIBERATING');
+    await advance(PARTNER_DELAYS.judge);
+    const [done] = await be.listAppeals(couple.id);
+    assert.equal(done!.status, 'JUDGED');
+    assert.equal(done!.fault_ratio_prosecutor! + done!.fault_ratio_defendant!, 100);
+    const after = await be.getCase(caseId);
+    assert.equal(after.status, 'JUDGED');
+    assert.deepEqual(
+      [after.verdict_judge, after.fault_ratio_prosecutor, after.judged_at],
+      [original.verdict_judge, original.fault_ratio_prosecutor, original.judged_at],
+    );
+  });
+
+  test('round 2 by the partner: I reply; then the 2-appeal limit', async () => {
+    const { be, couple, advance, caseId } = await judgedCase();
+    await be.fileAppeal(caseId, REASON);
+    await advance(PARTNER_DELAYS.defend);
+    await advance(PARTNER_DELAYS.judge);
+
+    assert.equal(await be.panel.partnerAppeals(), caseId);
+    const r2 = (await be.listAppeals(couple.id)).find((a) => a.round === 2)!;
+    assert.equal(r2.respondent_id, DEMO_ME_ID);
+    await be.replyAppeal(r2.id, 'Karar yerindeydi.');
+    assert.equal(await codeOf(be.replyAppeal(r2.id, 'tekrar')), 'REPLY_CLOSED');
+    await advance(PARTNER_DELAYS.judge);
+    assert.equal((await be.getCase(caseId)).status, 'JUDGED');
+    assert.equal(await codeOf(be.fileAppeal(caseId, REASON)), 'APPEAL_LIMIT_REACHED');
+    assert.equal(await codeOf(be.panel.partnerAppeals()), 'APPEAL_WINDOW_CLOSED');
+  });
+
+  test('no reply within 12 h: sweep injects the timeout reply and judges', async () => {
+    const { be, couple, advance, caseId } = await judgedCase();
+    await be.panel.partnerAppeals();
+    const [a] = await be.listAppeals(couple.id);
+    await advance(TWELVE_H);
+    const claimed = (await be.listAppeals(couple.id)).find((x) => x.id === a!.id)!;
+    assert.equal(claimed.reply_timed_out, true);
+    assert.match(claimed.respondent_reply!, /cevap vermemiştir/);
+    await advance(PARTNER_DELAYS.judge);
+    assert.equal((await be.getCase(caseId)).status, 'JUDGED');
+  });
+
+  test('appealView: no new appeal while a round is open, even if the cached case still reads JUDGED', async () => {
+    const { be, couple, caseId, now } = await judgedCase();
+    const judged = await be.getCase(caseId);
+    assert.equal(appealView(judged, [], now()).canAppeal, true);
+    await be.fileAppeal(caseId, REASON);
+    const view = appealView(judged, await be.listAppeals(couple.id), now()); // `judged` is the stale copy
+    assert.equal(view.canAppeal, false);
+    assert.equal(view.open?.round, 1);
+    assert.equal(view.currentRound, 0);
+  });
+
+  test('window: 12 h from the latest verdict, then closed', async () => {
+    const { be, advance, caseId } = await judgedCase();
+    await advance(TWELVE_H + 1000);
+    assert.equal(await codeOf(be.fileAppeal(caseId, REASON)), 'APPEAL_WINDOW_CLOSED');
+  });
+});
+
 describe('cooling-off room (silent cancel)', () => {
   test('delay bounds; time-scaled release; too-late cancel', async () => {
     const { be, couple, advance } = await paired();
@@ -228,6 +323,92 @@ describe('checklist LWW', () => {
 
     assert.equal(await codeOf(be.upsertChecklistItem(plan.id, { id: 'nope', text: 'x', done: false, deleted: false, updated_at: at(0) })), 'INVALID_ITEM_ID');
     assert.equal(await be.panel.partnerTogglesFirstItem(), true);
+  });
+});
+
+describe('decision wheel', () => {
+  test('seeded options; validation, duplicate guard and 12-option cap mirror the server', async () => {
+    const { be, couple } = await paired();
+    const seeded = (await be.listWheelOptions(couple.id)).map((o) => o.label);
+    assert.deepEqual(seeded, ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun']);
+    assert.equal(await codeOf(be.addWheelOption('   ')), 'INVALID_OPTION_LABEL');
+    assert.equal(await codeOf(be.addWheelOption('x'.repeat(31))), 'INVALID_OPTION_LABEL');
+    assert.equal(await codeOf(be.addWheelOption(' sushi ')), 'DUPLICATE_OPTION');
+    for (let i = 0; i < 7; i++) await be.addWheelOption(`Seçenek ${i}`);
+    assert.equal(await codeOf(be.addWheelOption('On üçüncü')), 'WHEEL_FULL');
+    assert.equal(await codeOf(be.removeWheelOption(randomUUID())), 'OPTION_NOT_FOUND');
+  });
+
+  test('spin stores snapshot + result; couple-wide cooldown; partner spin; history capped', async () => {
+    let r = 0.5;
+    const { be, couple, advance } = await paired(() => r);
+    const spin = await be.spinWheel();
+    assert.deepEqual(spin.option_labels, ['Sushi', 'Köfte', 'Pizza', 'Mantı', 'Lahmacun']);
+    assert.equal(spin.result_index, 2);
+    assert.equal(spin.result_label, 'Pizza');
+    assert.equal(spin.spun_by, DEMO_ME_ID);
+    assert.equal(await codeOf(be.spinWheel()), 'SPIN_COOLDOWN');
+    assert.equal(await codeOf(be.panel.partnerSpinsWheel()), 'SPIN_COOLDOWN');
+    await advance(WHEEL_COOLDOWN_MS);
+    r = 0.999;
+    assert.equal(await be.panel.partnerSpinsWheel(), 'Lahmacun');
+    const [latest] = await be.listWheelSpins(couple.id, 10);
+    assert.equal(latest!.spun_by, DEMO_PARTNER_ID);
+    for (let i = 0; i < 25; i++) {
+      await advance(WHEEL_COOLDOWN_MS);
+      await be.spinWheel();
+    }
+    assert.equal((await be.listWheelSpins(couple.id, 100)).length, 20);
+  });
+
+  test('fewer than two options cannot spin; removing is shared', async () => {
+    const { be, couple } = await paired();
+    const opts = await be.listWheelOptions(couple.id);
+    for (const o of opts.slice(1)) await be.removeWheelOption(o.id);
+    assert.equal(await codeOf(be.spinWheel()), 'NOT_ENOUGH_OPTIONS');
+    assert.equal(await codeOf(be.panel.partnerSpinsWheel()), 'NOT_ENOUGH_OPTIONS');
+  });
+
+  test('geometry: every result lands under the pointer, same spot for the same spin id', () => {
+    for (let n = 2; n <= 12; n++) {
+      for (let k = 0; k < n; k++) {
+        const id = randomUUID();
+        const rest = restingAngle(k, n, id);
+        assert.equal(rest, restingAngle(k, n, id));
+        assert.equal(segmentAt(rest, n), k);
+        for (const from of [0, 17.5, 3600 + 123]) {
+          const target = spinTarget(from, rest);
+          assert.ok(target - from >= 5 * 360 && target - from < 6 * 360);
+          assert.equal(segmentAt(target, n), k);
+        }
+      }
+    }
+  });
+});
+
+describe('leave couple', () => {
+  test('I leave: couple and every shared row are gone; I can pair again', async () => {
+    const { be, couple, mem } = await paired();
+    await be.spinWheel();
+    await be.leaveCouple();
+    assert.equal(await be.fetchMyCouple(DEMO_ME_ID), null);
+    for (const call of [be.listCases, be.listPlans, be.listMessages, be.listQuestions, be.listWheelOptions]) {
+      assert.equal(await codeOf(call(couple.id)), 'NOT_PAIRED');
+    }
+    assert.ok(![...mem.values()].some((v) => v.includes(couple.id)), 'old couple left in persisted demo state');
+    assert.equal(await codeOf(be.leaveCouple()), 'NOT_PAIRED');
+    assert.equal((await be.createPairingCode()).is_active, false);
+  });
+
+  test('partner leaves: my session is notified and lands unpaired', async () => {
+    const { be } = await paired();
+    let hits = 0;
+    const off = be.subscribe('couples', () => hits++);
+    await be.panel.partnerLeaves();
+    off();
+    assert.ok(hits > 0);
+    assert.equal(await be.fetchMyCouple(DEMO_ME_ID), null);
+    assert.equal(await codeOf(be.panel.partnerLeaves()), 'NOT_PAIRED');
   });
 });
 

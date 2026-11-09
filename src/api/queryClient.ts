@@ -1,10 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { focusManager, onlineManager, QueryClient } from '@tanstack/react-query';
 import { AppState, Platform } from 'react-native';
 import { demo, IS_DEMO } from '@/demo';
 import { isNetworkError } from '@/lib/errors';
+import { secureStorage } from '@/lib/secureStorage';
 import type { ChecklistItem, Plan } from '@/types/database.types';
 import { mk } from './keys';
 import { upsertChecklistItem } from './plans';
@@ -62,8 +62,10 @@ queryClient.setMutationDefaults(mk.checklistUpsert, {
   mutationFn: ({ planId, item }: ChecklistMutationVars): Promise<Plan> => upsertChecklistItem(planId, item),
 });
 
+// The cache holds pleas, verdicts, delivered messages and answers: encrypted
+// at rest like the session (B4). An unreadable cache is dropped and refetched.
 export const persister = createAsyncStoragePersister({
-  storage: AsyncStorage,
+  storage: secureStorage,
   key: 'duosync-query-cache',
   throttleTime: 1000,
 });
@@ -72,6 +74,16 @@ export const PERSIST_MAX_AGE = 24 * 60 * 60 * 1000;
 // Separate buster per mode: switching demo ↔ real on one device discards the
 // other mode's cached rows instead of rendering them.
 export const PERSIST_BUSTER = IS_DEMO ? 'demo-v1' : 'v1';
+
+/**
+ * The couple ended (I left or my partner did): its rows are already deleted
+ * server-side, so drop every cached copy and queued edit on this device too.
+ * The couple query itself stays; it is what just reported the change.
+ */
+export function dropCoupleData(): void {
+  queryClient.getMutationCache().clear();
+  queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'couple' });
+}
 
 /** Wipe all cached couple data — call on sign-out (shared-device privacy). */
 export async function clearQueryCache(): Promise<void> {

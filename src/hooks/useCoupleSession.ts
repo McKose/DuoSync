@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { fetchMyCouple } from '@/api/couple';
 import { qk } from '@/api/keys';
+import { dropCoupleData } from '@/api/queryClient';
 import { supabase } from '@/api/supabase';
 import { demo, IS_DEMO, toDemoSession } from '@/demo';
 import { useCoupleStore } from '@/store/useCoupleStore';
@@ -59,6 +60,17 @@ export function useCoupleSession() {
   useEffect(() => {
     if (coupleQuery.data !== undefined) setCouple(coupleQuery.data);
   }, [coupleQuery.data, setCouple]);
+
+  // 2b) Active couple gone (either partner left): shared data no longer exists
+  //     anywhere, so it must not linger in this device's persisted cache.
+  const lastActiveId = useRef<string | null>(null);
+  useEffect(() => {
+    const data = coupleQuery.data;
+    if (data === undefined) return;
+    const activeId = data?.is_active ? data.id : null;
+    if (lastActiveId.current && lastActiveId.current !== activeId) dropCoupleData();
+    lastActiveId.current = activeId;
+  }, [coupleQuery.data]);
 
   // 3) Live updates: partner joining my code, partner battery/status changes.
   useRealtimeSubscription({

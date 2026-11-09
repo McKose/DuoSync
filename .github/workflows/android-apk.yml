@@ -1,9 +1,24 @@
-name: Android APK (demo)
+name: Android APK
 
-# Builds an installable APK of the database-free demo mode.
-# - Manual: Actions → "Android APK (demo)" → Run workflow
-# - Push to the `apk-build` branch: `git push origin main:apk-build`
-# - Tag push (v*): also attaches the APK to a GitHub Release
+# Builds sideloadable APKs:
+# - live: talks to the real Supabase project; needs the repository variables
+#   DUOSYNC_SUPABASE_URL and DUOSYNC_SUPABASE_PUBLISHABLE_KEY
+#   (Settings → Secrets and variables → Actions → Variables). Both values are
+#   public by design (bundled into the app, protected by RLS) but are kept out
+#   of the repository like every other key. Optional: DUOSYNC_EAS_PROJECT_ID
+#   enables push registration once EAS + FCM are set up.
+# - demo: database-free demo mode. Same package name as live, so a phone holds
+#   one or the other; built only on request (user, 2026-11-09).
+# Which variants (the `plan` job):
+# - Push to the `apk-build` branch (`git push origin main:apk-build`): live.
+# - Manual: Actions → "Android APK" → Run workflow → live / demo / both.
+# - Tag push (v*): both; the demo APK is also attached to a GitHub Release.
+# - Variables missing: demo instead of live, with a warning.
+# The live APK stays an artifact. The repository is public, so any signed-in GitHub
+#   user can download artifacts, and the job log shows the URL + key. Neither
+#   is a secret (any APK can be unpacked); what keeps strangers out of the live
+#   project is Supabase Auth → "Allow new users to sign up" = off once both
+#   accounts exist (ROADMAP A4).
 #
 # The release variant is signed with the React Native debug keystore, so the
 # APK can be sideloaded for testing but is NOT suitable for the Play Store
@@ -11,6 +26,12 @@ name: Android APK (demo)
 
 on:
   workflow_dispatch:
+    inputs:
+      variants:
+        description: Which APK(s) to build
+        type: choice
+        options: [live, demo, both]
+        default: live
   push:
     branches: [apk-build]
     tags: ['v*']
@@ -23,16 +44,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: Choose APK variants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      variants: ${{ steps.plan.outputs.variants }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WANTED: ${{ inputs.variants }}
+          HAS_LIVE: ${{ vars.DUOSYNC_SUPABASE_URL != '' && vars.DUOSYNC_SUPABASE_PUBLISHABLE_KEY != '' }}
+        run: |
+          case "$EVENT:$REF" in
+            workflow_dispatch:*) want="${WANTED:-live}" ;;
+            push:refs/tags/*) want=both ;;
+            *) want=live ;; # push to apk-build
+          esac
+          if [[ "$HAS_LIVE" != true && "$want" != demo ]]; then
+            echo "::warning::DUOSYNC_SUPABASE_URL / DUOSYNC_SUPABASE_PUBLISHABLE_KEY not set: building the demo APK only"
+            want=demo
+          fi
+          case "$want" in
+            demo) variants='["demo"]' ;;
+            live) variants='["live"]' ;;
+            *) variants='["demo","live"]' ;;
+          esac
+          echo "variants=$variants" >> "$GITHUB_OUTPUT"
+          echo "Building: $variants" | tee -a "$GITHUB_STEP_SUMMARY"
+
   apk:
-    name: Build demo APK
+    name: Build ${{ matrix.variant }} APK
+    needs: plan
     # Pinned: the ubuntu-latest label moves to a new image on 2026-10-19.
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.plan.outputs.variants) }}
     env:
-      EXPO_PUBLIC_DEMO_MODE: '1'
+      EXPO_PUBLIC_DEMO_MODE: ${{ matrix.variant == 'demo' && '1' || '0' }}
+      EXPO_PUBLIC_SUPABASE_URL: ${{ matrix.variant == 'live' && vars.DUOSYNC_SUPABASE_URL || '' }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ matrix.variant == 'live' && vars.DUOSYNC_SUPABASE_PUBLISHABLE_KEY || '' }}
+      EXPO_PUBLIC_EAS_PROJECT_ID: ${{ matrix.variant == 'live' && vars.DUOSYNC_EAS_PROJECT_ID || '' }}
       NODE_ENV: production
       CI: '1'
     steps:
+      # The app silently falls back to demo mode when the Supabase values are
+      # missing (src/demo/config.ts), so a broken live build must fail here
+      # instead of shipping a demo APK named "live".
+      - name: Check live configuration
+        if: matrix.variant == 'live'
+        run: |
+          [[ "$EXPO_PUBLIC_SUPABASE_URL" =~ ^https://[a-z0-9]+\.supabase\.co/?$ ]] \
+            || { echo "::error::DUOSYNC_SUPABASE_URL must look like https://<ref>.supabase.co"; exit 1; }
+          [[ "$EXPO_PUBLIC_SUPABASE_ANON_KEY" == sb_publishable_* || "$EXPO_PUBLIC_SUPABASE_ANON_KEY" == eyJ* ]] \
+            || { echo "::error::DUOSYNC_SUPABASE_PUBLISHABLE_KEY must be a publishable (sb_publishable_…) or anon key"; exit 1; }
+          echo "Live build for ${EXPO_PUBLIC_SUPABASE_URL}; push registration: ${EXPO_PUBLIC_EAS_PROJECT_ID:+on}${EXPO_PUBLIC_EAS_PROJECT_ID:-off (no DUOSYNC_EAS_PROJECT_ID)}"
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
@@ -46,41 +118,86 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Also save the cache from apk-build (default: main only), so later
+          # builds download less and depend less on remote repositories.
+          cache-read-only: false
 
       - run: npm ci
 
       - name: Generate native Android project (CNG)
         run: npx expo prebuild --platform android --no-install --clean
 
+      # The generated wrapper gives services.gradle.org 10 s; run 2 failed there
+      # (read timeout) before anything compiled. Allow 2 min and fetch the
+      # distribution in its own step, retried, so a slow mirror is not a red build.
+      - name: Fetch Gradle distribution
+        working-directory: android
+        run: |
+          sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
+          grep -q '^networkTimeout=120000' gradle/wrapper/gradle-wrapper.properties \
+            || echo 'networkTimeout=120000' >> gradle/wrapper/gradle-wrapper.properties
+          for i in 1 2 3; do
+            ./gradlew --version --no-daemon && exit 0
+            echo "Gradle download attempt $i failed; retrying in $((i * 20)) s"
+            sleep $((i * 20))
+          done
+          exit 1
+
       - name: Gradle assembleRelease
         working-directory: android
         # Two ABIs cover practically every Android phone in use and roughly
         # halve build time and APK size versus all four.
-        run: >
-          ./gradlew assembleRelease --no-daemon
-          -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
-          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g"
+        # Run 3 failed resolving kotlin-compiler-embeddable (Maven Central →
+        # GitHub release redirect answered 504): more HTTP retries with longer
+        # timeouts inside Gradle, and one more attempt of the whole step, which
+        # reuses everything the first attempt already downloaded.
+        run: |
+          for i in 1 2; do
+            ./gradlew assembleRelease --no-daemon \
+              -PreactNativeArchitectures=arm64-v8a,armeabi-v7a \
+              -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
+              -Dorg.gradle.internal.repository.max.retries=6 \
+              -Dorg.gradle.internal.repository.initial.backoff=2000 \
+              -Dorg.gradle.internal.http.connectionTimeout=120000 \
+              -Dorg.gradle.internal.http.socketTimeout=120000 && exit 0
+            echo "assembleRelease attempt $i failed; retrying in 60 s"
+            sleep 60
+          done
+          exit 1
 
       - name: Collect APK
         id: apk
         run: |
           src=android/app/build/outputs/apk/release/app-release.apk
           test -f "$src"
-          name="DuoSync-demo-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}.apk"
+          name="DuoSync-${{ matrix.variant }}-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}.apk"
           mkdir -p out && cp "$src" "out/$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "### APK hazır: \`$name\` ($(du -h "out/$name" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "out/$name" | head -3 || true
+          echo "### ${{ matrix.variant }} APK hazır: \`$name\` ($(du -h "out/$name" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          # The runner has several build-tools versions; a bare glob passed the
+          # second apksigner path to the first as its command (run 5).
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$apksigner" verify --print-certs "out/$name" | head -3 || true
+          if [[ "${{ matrix.variant }}" == live ]]; then
+            host="${EXPO_PUBLIC_SUPABASE_URL#https://}"; host="${host%/}"
+            # Hermes keeps string literals readable in the bytecode bundle.
+            if unzip -p "out/$name" assets/index.android.bundle | grep -a -q "$host"; then
+              echo "Bundle points at $host" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::$host not found in the JS bundle; check that the APK is not in demo mode"
+            fi
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: duosync-demo-apk
+          name: duosync-${{ matrix.variant }}-apk
           path: out/*.apk
           retention-days: 30
           if-no-files-found: error
 
-      - name: Attach to GitHub Release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach to GitHub Release (tags only, demo only)
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.variant == 'demo'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
