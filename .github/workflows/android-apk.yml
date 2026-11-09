@@ -52,6 +52,22 @@ jobs:
       - name: Generate native Android project (CNG)
         run: npx expo prebuild --platform android --no-install --clean
 
+      # The generated wrapper gives services.gradle.org 10 s; run 2 failed there
+      # (read timeout) before anything compiled. Allow 2 min and fetch the
+      # distribution in its own step, retried, so a slow mirror is not a red build.
+      - name: Fetch Gradle distribution
+        working-directory: android
+        run: |
+          sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
+          grep -q '^networkTimeout=120000' gradle/wrapper/gradle-wrapper.properties \
+            || echo 'networkTimeout=120000' >> gradle/wrapper/gradle-wrapper.properties
+          for i in 1 2 3; do
+            ./gradlew --version --no-daemon && exit 0
+            echo "Gradle download attempt $i failed; retrying in $((i * 20)) s"
+            sleep $((i * 20))
+          done
+          exit 1
+
       - name: Gradle assembleRelease
         working-directory: android
         # Two ABIs cover practically every Android phone in use and roughly
