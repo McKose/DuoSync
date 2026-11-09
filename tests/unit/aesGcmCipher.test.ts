@@ -72,10 +72,13 @@ function androidLikeApi(opts: { overAllocate?: number } = {}) {
   return { api, calls };
 }
 
-function storageWith(api: ExpoAesApi<FakeKey, FakeSealed>) {
-  const store = new Map<string, string>();
-  const keys = new Map<string, string>();
-  const discarded: string[] = [];
+function storageWith(
+  api: ExpoAesApi<FakeKey, FakeSealed>,
+  shared: { store?: Map<string, string>; keys?: Map<string, string> } = {},
+) {
+  const store = shared.store ?? new Map<string, string>();
+  const keys = shared.keys ?? new Map<string, string>();
+  const unreadable: string[] = [];
   const s = createEncryptedStorage({
     storage: {
       getItem: async (k) => store.get(k) ?? null,
@@ -85,9 +88,16 @@ function storageWith(api: ExpoAesApi<FakeKey, FakeSealed>) {
     keyStore: { get: async (n) => keys.get(n) ?? null, set: async (n, v) => void keys.set(n, v) },
     cipher: createAesGcmCipher(api),
     keyName: 'test.key',
-    onDiscard: (k) => discarded.push(k),
+    onUnreadable: (k) => unreadable.push(k),
   });
-  return { s, store, discarded };
+  return { s, store, keys, unreadable };
+}
+
+/** Write in one process, read in a fresh one (no in-memory copy): forces the native decrypt path. */
+async function writeThenRestart(api: ExpoAesApi<FakeKey, FakeSealed>, entries: Record<string, string>) {
+  const first = storageWith(api);
+  for (const [k, v] of Object.entries(entries)) await first.s.setItem(k, v);
+  return storageWith(api, { store: first.store, keys: first.keys });
 }
 
 // What supabase-js writes after signUp (shape only; values are fake).
@@ -102,29 +112,26 @@ const SESSION = JSON.stringify({
 describe('expo-crypto AES-GCM binding (Android-strict fake)', () => {
   test('session written after sign-up reads back intact (the A4 bug: it was discarded)', async () => {
     const { api, calls } = androidLikeApi();
-    const { s, store, discarded } = storageWith(api);
-    await s.setItem(SESSION_KEY, SESSION);
+    const { s, store, unreadable } = await writeThenRestart(api, { [SESSION_KEY]: SESSION });
     assert.ok(store.get(SESSION_KEY)?.startsWith(ENVELOPE_PREFIX));
     assert.equal(await s.getItem(SESSION_KEY), SESSION);
     assert.equal(await s.getItem(SESSION_KEY), SESSION, 'every request re-reads the session');
-    assert.deepEqual(discarded, []);
-    assert.equal(calls.fromCombined, 2);
+    assert.deepEqual(unreadable, []);
+    assert.equal(calls.fromCombined, 1, 'decrypted once, then served from memory');
     assert.deepEqual(JSON.parse((await s.getItem(SESSION_KEY))!), JSON.parse(SESSION));
   });
 
   test('provider that over-allocates the output buffer: trailing zeros are trimmed', async () => {
     const { api } = androidLikeApi({ overAllocate: TAG_BYTES });
-    const { s, discarded } = storageWith(api);
-    await s.setItem(SESSION_KEY, SESSION);
+    const { s, unreadable } = await writeThenRestart(api, { [SESSION_KEY]: SESSION });
     const back = await s.getItem(SESSION_KEY);
     assert.equal(back, SESSION);
     assert.equal(back?.includes('\u0000'), false);
-    assert.deepEqual(discarded, []);
+    assert.deepEqual(unreadable, []);
   });
 
   test('empty string round trips (zero-length plaintext)', async () => {
-    const { s } = storageWith(androidLikeApi().api);
-    await s.setItem('k', '');
+    const { s } = await writeThenRestart(androidLikeApi().api, { k: '' });
     assert.equal(await s.getItem('k'), '');
   });
 
@@ -140,17 +147,17 @@ describe('expo-crypto AES-GCM binding (Android-strict fake)', () => {
     assert.equal(new TextDecoder().decode(pt), 'hello');
   });
 
-  test('truncated or non-base64 envelope fails closed (discarded, null), never reaches native', async () => {
+  test('truncated or non-base64 envelope: null, never reaches native, value kept', async () => {
     const { api, calls } = androidLikeApi();
-    const { s, store, discarded } = storageWith(api);
-    await s.setItem('a', 'x'); // creates the key
+    const { s, store, unreadable } = await writeThenRestart(api, { a: 'x' }); // creates the key
     store.set('short', ENVELOPE_PREFIX + b64(new Uint8Array(IV_BYTES + TAG_BYTES - 1)));
     store.set('junk', ENVELOPE_PREFIX + '***not base64***');
     calls.fromCombined = 0;
     assert.equal(await s.getItem('short'), null);
     assert.equal(await s.getItem('junk'), null);
-    assert.deepEqual(discarded, ['short', 'junk']);
+    assert.deepEqual(unreadable, ['short', 'junk']);
     assert.equal(calls.fromCombined, 0);
+    assert.ok(store.has('short') && store.has('junk'));
   });
 });
 

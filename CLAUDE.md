@@ -43,7 +43,7 @@ pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite`
 | `src/lib/appeals.ts` | Appeal limits + `appealView()`: rounds, can-appeal, which verdict counts |
 | `src/lib/encryptedStorage.ts` · `aesGcmCipher.ts` · `secureStorage.ts` | B4: AES-256-GCM storage adapter (pure, DI) · cipher typed as expo-crypto's **native** side accepts it (`fromCombined` takes bytes only; output trimmed to exact length) · RN binding (key in `expo-secure-store`); used by the Supabase session and the persisted query cache |
 | `tests/demo/engine.test.ts` | 31 demo contract tests |
-| `tests/unit/encryptedStorage.test.ts` | 13 tests: real AES-GCM via Node WebCrypto, tamper / lost key / AAD / single-flight / legacy migration / UTF-8 |
+| `tests/unit/encryptedStorage.test.ts` | 18 tests: real AES-GCM via Node WebCrypto, tamper / lost key / AAD / single-flight / legacy migration / UTF-8; decrypt once per process (memory cache), transient error retried, unreadable value kept (never deleted on read), per-entry write order |
 | `tests/unit/aesGcmCipher.test.ts` | 7 tests: the expo-crypto binding against a fake as strict as the Android module (bytes-only `fromCombined`, over-allocated output), base64 decoder. Mock native modules with their Kotlin/Swift signatures, not their `.d.ts` |
 | `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (14 steps) |
 | `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e) · demo APK build (push to `apk-build` branch) |

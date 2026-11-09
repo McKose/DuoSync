@@ -37,6 +37,7 @@ export interface ExpoAesApi<K extends AesKeyLike, S extends SealedLike> {
 }
 
 export function createAesGcmCipher<K extends AesKeyLike, S extends SealedLike>(api: ExpoAesApi<K, S>): Cipher<K> {
+  const inFlight = new Set<S>();
   return {
     generateKey: () => api.generateKey(),
     exportKey: (key) => key.encoded('base64'),
@@ -46,7 +47,16 @@ export function createAesGcmCipher<K extends AesKeyLike, S extends SealedLike>(a
     decrypt: async (sealed, key, aad) => {
       const combined = base64ToBytes(sealed);
       if (combined.length < IV_BYTES + TAG_BYTES) throw new Error('sealed value too short');
-      const plain = await api.decryptAsync(api.fromCombined(combined), key, { output: 'bytes', additionalData: aad });
+      // Precaution: keep the native SealedData reachable until the async call
+      // has finished, so a GC of the JS wrapper cannot release it mid-call.
+      const sealedData = api.fromCombined(combined);
+      inFlight.add(sealedData);
+      let plain: Uint8Array;
+      try {
+        plain = await api.decryptAsync(sealedData, key, { output: 'bytes', additionalData: aad });
+      } finally {
+        inFlight.delete(sealedData);
+      }
       // GCM is a stream mode: plaintext length = combined − iv − tag, exactly.
       // The Android module returns its whole output buffer, sized by the
       // provider's getOutputSize(); trim so a provider that over-allocates

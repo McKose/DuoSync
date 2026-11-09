@@ -38,13 +38,36 @@ export interface EncryptedStorageOptions<K> {
   cipher: Cipher<K>;
   /** Keystore entry name of the encryption key. */
   keyName: string;
-  /** Called when a stored value cannot be decrypted and is discarded. */
-  onDiscard?: (key: string, error: unknown) => void;
+  /** Called when a stored value cannot be decrypted (after one retry); the value is kept. */
+  onUnreadable?: (key: string, error: unknown) => void;
 }
 
+// Design notes (first phone run, 2026-11-09 — ROADMAP B4):
+// - supabase-js reads the session from storage on *every* request. Each read
+//   used to be a native AES call; one failed read deleted the session for good
+//   and every later request went out as anon. Now each entry is decrypted at
+//   most once per process and then served from memory (the same plaintext
+//   supabase-js holds in memory anyway; at-rest protection is unchanged).
+// - An unreadable value is no longer deleted: GCM already guarantees that
+//   tampered data never decrypts, so deleting adds no safety, but it turned a
+//   transient native error into a permanent sign-out. The next write simply
+//   replaces it.
+// - Operations on one entry run in call order, so the cache and AsyncStorage
+//   cannot disagree after concurrent writes.
 export function createEncryptedStorage<K>(opts: EncryptedStorageOptions<K>): KeyValueStorage {
-  const { storage, keyStore, cipher, keyName, onDiscard } = opts;
+  const { storage, keyStore, cipher, keyName, onUnreadable } = opts;
   let keyPromise: Promise<K> | null = null;
+  const cache = new Map<string, string>();
+  const queues = new Map<string, Promise<unknown>>();
+
+  const serial = <T>(name: string, op: () => Promise<T>): Promise<T> => {
+    const run = (queues.get(name) ?? Promise.resolve()).then(op, op);
+    queues.set(
+      name,
+      run.catch(() => undefined),
+    );
+    return run;
+  };
 
   // Single flight: two first writes racing must not create two keys, or the
   // value written with the overwritten key could never be read again.
@@ -62,35 +85,59 @@ export function createEncryptedStorage<K>(opts: EncryptedStorageOptions<K>): Key
     return keyPromise;
   };
 
-  const setItem = async (name: string, value: string): Promise<void> => {
+  const write = async (name: string, value: string): Promise<void> => {
     const key = await getKey();
     // The entry name is authenticated data: a value copied under another
     // name fails to decrypt instead of being accepted.
     const sealed = await cipher.encrypt(utf8Encode(value), key, utf8Encode(name));
     await storage.setItem(name, ENVELOPE_PREFIX + sealed);
+    cache.set(name, value);
   };
 
-  const getItem = async (name: string): Promise<string | null> => {
+  const open = async (name: string, raw: string): Promise<string> => {
+    const key = await getKey();
+    return utf8Decode(await cipher.decrypt(raw.slice(ENVELOPE_PREFIX.length), key, utf8Encode(name)));
+  };
+
+  const read = async (name: string): Promise<string | null> => {
+    const hit = cache.get(name);
+    if (hit !== undefined) return hit; // a read queued behind a write
     const raw = await storage.getItem(name);
     if (raw === null) return null;
     if (!raw.startsWith(ENVELOPE_PREFIX)) {
       // Written before encryption existed: encrypt it in place, keep using it.
-      await setItem(name, raw);
+      await write(name, raw);
       return raw;
     }
+    let value: string;
     try {
-      const key = await getKey();
-      return utf8Decode(await cipher.decrypt(raw.slice(ENVELOPE_PREFIX.length), key, utf8Encode(name)));
+      // One retry: a transient native or keystore error must not cost the session.
+      value = await open(name, raw).catch(() => open(name, raw));
     } catch (e) {
       // Tampered value, or the key is gone (app data restored without the
-      // keystore). Fail closed: drop it, the user signs in again.
-      onDiscard?.(name, e);
-      await storage.removeItem(name);
+      // keystore): unreadable, so the caller sees "no value". Never plaintext,
+      // never deleted — see the design notes above.
+      onUnreadable?.(name, e);
       return null;
     }
+    cache.set(name, value);
+    return value;
   };
 
-  return { getItem, setItem, removeItem: (name) => storage.removeItem(name) };
+  return {
+    getItem: (name) => {
+      const hit = cache.get(name);
+      return hit !== undefined ? Promise.resolve(hit) : serial(name, () => read(name));
+    },
+    setItem: (name, value) => serial(name, () => write(name, value)),
+    removeItem: (name) => {
+      cache.delete(name); // at once: a read issued after this call must not see the old value
+      return serial(name, async () => {
+        cache.delete(name);
+        await storage.removeItem(name);
+      });
+    },
+  };
 }
 
 // UTF-8 by hand: AES APIs take bytes (or base64), and TextDecoder is not

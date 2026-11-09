@@ -31,6 +31,17 @@ const aesGcm = createAesGcmCipher({
   decryptAsync: (sealed, key, options) => aesDecryptAsync(sealed, key, options),
 });
 
+let lastProblem: string | null = null;
+
+/**
+ * Last storage read that failed even after a retry (entry name + error text,
+ * never the value), so the login screen can show something the user can send
+ * back. Null on web and when nothing failed in this process.
+ */
+export function lastStorageProblem(): string | null {
+  return lastProblem;
+}
+
 export const secureStorage: KeyValueStorage =
   Platform.OS === 'web'
     ? AsyncStorage
@@ -42,6 +53,10 @@ export const secureStorage: KeyValueStorage =
         },
         cipher: aesGcm,
         keyName: KEY_NAME,
-        // Never log the value; the entry name is enough to explain a sign-out.
-        onDiscard: (key) => console.warn(`[secureStorage] unreadable value for "${key}" discarded`),
+        // Never log the value; the entry name and error text explain a sign-out.
+        onUnreadable: (key, error) => {
+          const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+          lastProblem = `${key} — ${text}`.slice(0, 200);
+          console.warn(`[secureStorage] unreadable value for "${key}": ${text}`);
+        },
       });

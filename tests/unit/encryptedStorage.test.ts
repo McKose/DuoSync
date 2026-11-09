@@ -18,7 +18,14 @@ const subtle = webcrypto.subtle;
 const b64 = (u: Uint8Array) => Buffer.from(u).toString('base64');
 const unb64 = (s: string) => new Uint8Array(Buffer.from(s, 'base64'));
 
-function webCryptoCipher(counter = { generated: 0 }): Cipher<CryptoKey> {
+interface Counter {
+  generated: number;
+  decrypted: number;
+  /** Number of upcoming decrypt calls that throw (a transient native error). */
+  failNextDecrypts: number;
+}
+
+function webCryptoCipher(counter: Counter = { generated: 0, decrypted: 0, failNextDecrypts: 0 }): Cipher<CryptoKey> {
   return {
     generateKey: async () => {
       counter.generated++;
@@ -32,6 +39,11 @@ function webCryptoCipher(counter = { generated: 0 }): Cipher<CryptoKey> {
       return b64(Uint8Array.from([...iv, ...ct])); // iv ‖ ciphertext ‖ tag, like expo-crypto's combined()
     },
     decrypt: async (sealed, key, aad) => {
+      counter.decrypted++;
+      if (counter.failNextDecrypts > 0) {
+        counter.failNextDecrypts--;
+        throw new Error('transient native error');
+      }
       const all = unb64(sealed);
       const pt = await subtle.decrypt({ name: 'AES-GCM', iv: all.slice(0, 12), additionalData: aad }, key, all.slice(12));
       return new Uint8Array(pt);
@@ -42,8 +54,8 @@ function webCryptoCipher(counter = { generated: 0 }): Cipher<CryptoKey> {
 function setup(opts: { keyStore?: KeyStore; store?: Map<string, string>; keys?: Map<string, string> } = {}) {
   const store = opts.store ?? new Map<string, string>();
   const keys = opts.keys ?? new Map<string, string>();
-  const counter = { generated: 0 };
-  const discarded: string[] = [];
+  const counter: Counter = { generated: 0, decrypted: 0, failNextDecrypts: 0 };
+  const unreadable: string[] = [];
   const s = createEncryptedStorage({
     storage: {
       getItem: async (k) => store.get(k) ?? null,
@@ -53,9 +65,9 @@ function setup(opts: { keyStore?: KeyStore; store?: Map<string, string>; keys?: 
     keyStore: opts.keyStore ?? { get: async (n) => keys.get(n) ?? null, set: async (n, v) => void keys.set(n, v) },
     cipher: webCryptoCipher(counter),
     keyName: 'test.key',
-    onDiscard: (k) => discarded.push(k),
+    onUnreadable: (k) => unreadable.push(k),
   });
-  return { s, store, keys, counter, discarded };
+  return { s, store, keys, counter, unreadable };
 }
 
 const SESSION = JSON.stringify({
@@ -109,16 +121,86 @@ describe('encrypted storage', () => {
     assert.equal(await s.getItem('sb-auth-token'), SESSION);
   });
 
-  test('tampered ciphertext fails closed: discarded, null', async () => {
-    const { s, store, discarded } = setup();
-    await s.setItem('k', SESSION);
-    const raw = store.get('k')!;
+  test('tampered ciphertext fails closed: null, never plaintext; kept until the next write', async () => {
+    const first = setup();
+    await first.s.setItem('k', SESSION);
+    const raw = first.store.get('k')!;
     const body = Buffer.from(raw.slice(ENVELOPE_PREFIX.length), 'base64');
     body[20] = (body[20] ?? 0) ^ 0x01; // flip one ciphertext bit
-    store.set('k', ENVELOPE_PREFIX + body.toString('base64'));
+    first.store.set('k', ENVELOPE_PREFIX + body.toString('base64'));
+    // New process (no in-memory copy), same storage + keystore.
+    const { s, store, unreadable } = setup({ store: first.store, keys: first.keys });
     assert.equal(await s.getItem('k'), null);
-    assert.equal(store.has('k'), false);
-    assert.deepEqual(discarded, ['k']);
+    assert.equal(store.has('k'), true, 'not deleted: a transient error must not cost the session');
+    assert.deepEqual(unreadable, ['k']);
+    await s.setItem('k', 'after sign-in');
+    assert.equal(await s.getItem('k'), 'after sign-in');
+  });
+
+  test('each entry is decrypted at most once per process, then served from memory', async () => {
+    const first = setup();
+    await first.s.setItem('sb-auth-token', SESSION);
+    assert.equal(await first.s.getItem('sb-auth-token'), SESSION);
+    assert.equal(first.counter.decrypted, 0, 'value just written: no decrypt at all');
+    const restarted = setup({ store: first.store, keys: first.keys });
+    const reads = await Promise.all(Array.from({ length: 20 }, () => restarted.s.getItem('sb-auth-token')));
+    assert.ok(reads.every((r) => r === SESSION));
+    assert.equal(restarted.counter.decrypted, 1, 'concurrent first reads share one decrypt');
+    assert.equal(await restarted.s.getItem('sb-auth-token'), SESSION);
+    assert.equal(restarted.counter.decrypted, 1);
+  });
+
+  test('a transient decrypt error is retried once and does not lose the value (A4 phone run)', async () => {
+    const first = setup();
+    await first.s.setItem('sb-auth-token', SESSION);
+    const restarted = setup({ store: first.store, keys: first.keys });
+    restarted.counter.failNextDecrypts = 1;
+    assert.equal(await restarted.s.getItem('sb-auth-token'), SESSION);
+    assert.deepEqual(restarted.unreadable, []);
+  });
+
+  test('a failure that outlasts the retry returns null but keeps the value for the next read', async () => {
+    const first = setup();
+    await first.s.setItem('sb-auth-token', SESSION);
+    const restarted = setup({ store: first.store, keys: first.keys });
+    restarted.counter.failNextDecrypts = 2;
+    assert.equal(await restarted.s.getItem('sb-auth-token'), null);
+    assert.deepEqual(restarted.unreadable, ['sb-auth-token']);
+    assert.equal(await restarted.s.getItem('sb-auth-token'), SESSION, 'recovers on the next read');
+  });
+
+  test('concurrent writes to one entry land in call order (memory and storage agree)', async () => {
+    const store = new Map<string, string>();
+    const keys = new Map<string, string>();
+    let writes = 0;
+    const s = createEncryptedStorage({
+      storage: {
+        getItem: async (k) => store.get(k) ?? null,
+        // The first write is the slowest to land, as a busy disk might make it.
+        setItem: async (k, v) => {
+          const delay = writes++ === 0 ? 30 : 0;
+          await new Promise((r) => setTimeout(r, delay));
+          store.set(k, v);
+        },
+        removeItem: async (k) => void store.delete(k),
+      },
+      keyStore: { get: async (n) => keys.get(n) ?? null, set: async (n, v) => void keys.set(n, v) },
+      cipher: webCryptoCipher(),
+      keyName: 'test.key',
+    });
+    await Promise.all(['v1', 'v2', 'v3', 'v4'].map((v) => s.setItem('k', v)));
+    assert.equal(await s.getItem('k'), 'v4');
+    const restarted = setup({ store, keys });
+    assert.equal(await restarted.s.getItem('k'), 'v4', 'storage holds the last write, not the slowest');
+  });
+
+  test('removeItem wins over a cached value, also for a read issued right after it', async () => {
+    const { s } = setup();
+    await s.setItem('k', 'v');
+    const removing = s.removeItem('k');
+    assert.equal(await s.getItem('k'), null);
+    await removing;
+    assert.equal(await s.getItem('k'), null);
   });
 
   test('a value copied under another entry name does not decrypt (name is authenticated)', async () => {
@@ -134,7 +216,7 @@ describe('encrypted storage', () => {
     await first.s.setItem('k', SESSION);
     const restored = setup({ store: first.store }); // AsyncStorage came back, keystore did not
     assert.equal(await restored.s.getItem('k'), null);
-    assert.equal(restored.store.has('k'), false);
+    assert.deepEqual(restored.unreadable, ['k']);
     await restored.s.setItem('k', 'after sign-in');
     assert.equal(await restored.s.getItem('k'), 'after sign-in');
   });
