@@ -39,8 +39,8 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | Eşleşme bozma (B2) | ✅ code + tests; ✅ `leave_couple()` ran live once (A3 cleanup, 2026-11-08); ❌ not yet on phones (A5); rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
 | Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore), ❌ not yet on a phone (A4/A5) |
-| Gemini maliyet/kota izleme (D2) | ✅ code + tests (per-call log, daily cap, 80/100 % alert, report) |
-| Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 5 migrations, 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
+| Gemini maliyet/kota izleme (D2) | ✅ code + tests (per-call log, daily cap, 80/100 % alert, report); ✅ live (2026-11-08: 1 verdict = 1117 tokens logged) |
+| Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 6 migrations (D2 added 2026-11-08), 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
 | Physical device run | ❌ never |
 
 ## 3. Product decisions
@@ -242,6 +242,12 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   pruning, client/anon denied; mutation: dropping the revokes fails 2), Deno +7 (usage parsing, limits, levels;
   mutation: alert firing on every call fails 1). Zero cost: the real guarantee on Google's side is a free-tier key (no
   billing linked in AI Studio); the cap is the second line and also keeps the free quota from running out mid-day.
+  *Live 2026-11-08:* migration applied to `ndxpbbvfgupxlgoqoesh` (version aligned to `20261108000000`; RPCs executable
+  by `service_role` only), `ai-court-verdict` v5 + `send-push-notification` v4 deployed. End-to-end check with two
+  `d2-test-*@duosync.invalid` users: case judged on the first call (20/80), one `llm_usage` row = `ok`, HTTP 200,
+  2032 ms, 778 prompt + 339 output = **1117 tokens**, billable; `llm_usage_today()` = 1 / 1117. Measured ≈ 1.1 k
+  tokens per first-instance verdict, below the 2–4 k estimate, so the 300 k default leaves ≥ 4× headroom over the
+  app's own maximum. Test couple removed with `leave_couple()`; the anonymous usage row is kept as a real sample.
 
 ### Backlog (trigger-based)
 | Task | Trigger |
