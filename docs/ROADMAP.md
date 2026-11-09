@@ -151,6 +151,12 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   *Progress 2026-11-09:* live APK built (run 5, `da51b27`, bundle verified to point at `ndxpbbvfgupxlgoqoesh`);
   handed to the user for installation on both phones. Next: both sign up → check `email_confirmed_at` set and
   profiles created, pair, walk every screen; then sign-ups off. Push (EAS project id + FCM) is the remaining gap.
+  **Exposure found 2026-11-09:** the repository is public, so the live artifact is downloadable by any signed-in
+  GitHub user and run logs show URL + publishable key (public by design; any APK can be unpacked anyway). While
+  sign-ups are open, a stranger could create two accounts, pair them and file cases: no data of ours is reachable
+  (RLS, rule #1), cost stays 0 on a free-tier key, but the D2 daily cap could be used up (our verdicts wait until
+  UTC midnight). Mitigation: sign-ups off right after both accounts exist; optionally delete the `duosync-live-apk`
+  artifact after installing. Making the repository private would also hide logs/artifacts (user's call).
 - [ ] **A5. Live verification matrix** (1 d)
   | Scenario | Expected |
   |---|---|

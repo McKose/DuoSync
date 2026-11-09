@@ -12,7 +12,11 @@ name: Android APK
 # - Manual: Actions → "Android APK" → Run workflow
 # - Push to the `apk-build` branch: `git push origin main:apk-build`
 # - Tag push (v*): also attaches the demo APK to a GitHub Release (the live
-#   APK stays an artifact, visible only to people with repository access)
+#   APK stays an artifact). The repository is public, so any signed-in GitHub
+#   user can download artifacts, and the job log shows the URL + key. Neither
+#   is a secret (any APK can be unpacked); what keeps strangers out of the live
+#   project is Supabase Auth → "Allow new users to sign up" = off once both
+#   accounts exist (ROADMAP A4).
 #
 # The release variant is signed with the React Native debug keystore, so the
 # APK can be sideloaded for testing but is NOT suitable for the Play Store
