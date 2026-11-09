@@ -44,16 +44,19 @@ npm run demo -- --web   # ya da tarayıcıda aç
 
 > Demo modu yalnızca geliştirme/test içindir; veriler şifrelenmeden cihazda durur ve iki gerçek kişiyi eşleştirmez.
 
-## Android APK (demo)
+## Android APK
 
-Veritabanısız demo sürümünün telefona kurulabilen APK'sı GitHub Actions'ta derlenir (`.github/workflows/android-apk.yml`).
+Telefona kurulabilen APK'lar GitHub Actions'ta derlenir (`.github/workflows/android-apk.yml`). İki çeşit vardır:
+**canlı** (gerçek Supabase projesine bağlı) ve **demo** (veritabanısız). Paket adları aynı olduğu için bir telefonda
+ikisinden yalnızca biri durabilir.
 
-**Yeni APK derletmek** (üçünden biri):
-- GitHub → **Actions** → **Android APK (demo)** → **Run workflow**
-- `git push origin main:apk-build`
-- `v*` etiketi push'la (ör. `v0.1.0-demo`). APK, bir GitHub Release'e de eklenir.
+**Yeni APK derletmek:**
+- `git push origin main:apk-build` → yalnızca **canlı** APK.
+- GitHub → **Actions** → **Android APK** → **Run workflow** → `live` / `demo` / `both`.
+- `v*` etiketi push'la (ör. `v0.1.0`) → ikisi de; demo APK bir GitHub Release'e de eklenir.
+- Canlı APK değişkenleri (aşağıda) tanımlı değilse bunların yerine demo derlenir ve uyarı yazılır.
 
-**İndirmek:** İlgili çalıştırmanın sayfasında, en altta **Artifacts → duosync-demo-apk**. Zip'ten `DuoSync-demo-….apk` çıkar. Derleme ~15 dk sürer; artifact 30 gün saklanır.
+**İndirmek:** İlgili çalıştırmanın sayfasında, en altta **Artifacts → duosync-live-apk** (veya `duosync-demo-apk`). Zip'ten `DuoSync-<live|demo>-….apk` çıkar. Derleme ~13 dk sürer; artifact 30 gün saklanır.
 
 **Kurmak:** APK'yı telefona at, aç, **"Bilinmeyen kaynaklardan yüklemeye izin ver"** de.
 - arm64-v8a ve armeabi-v7a içerir, yani pratikte tüm telefonlarda çalışır. x86 emülatörlerde çalışmaz.
@@ -67,7 +70,7 @@ npm install
 cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ```
 
-**APK (GitHub Actions, ücretsiz):** `apk-build` dalına push → "Android APK" workflow'u demo APK'yı her zaman üretir. Canlı APK için repoda (Settings → Secrets and variables → Actions → **Variables**) `DUOSYNC_SUPABASE_URL` ve `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` tanımlı olmalı; ikisi de herkese açık değerlerdir (uygulamaya gömülür, koruma RLS'tedir) ama depoya yazılmaz. Opsiyonel `DUOSYNC_EAS_PROJECT_ID` push kaydını açar (EAS + FCM kurulumu gerekir). Workflow eksik/yanlış değerle "canlı" adı altında demo APK üretmez, hata verir.
+**APK (GitHub Actions, ücretsiz):** `apk-build` dalına push → "Android APK" workflow'u canlı APK'yı üretir (demo yalnızca elle ya da etiketle, bkz. §Android APK). Canlı APK için repoda (Settings → Secrets and variables → Actions → **Variables**) `DUOSYNC_SUPABASE_URL` ve `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` tanımlı olmalı; ikisi de herkese açık değerlerdir (uygulamaya gömülür, koruma RLS'tedir) ama depoya yazılmaz. Opsiyonel `DUOSYNC_EAS_PROJECT_ID` push kaydını açar (EAS + FCM kurulumu gerekir). Workflow eksik/yanlış değerle "canlı" adı altında demo APK üretmez, hata verir.
 
 ### 2. Supabase
 ```bash

@@ -1,18 +1,20 @@
 name: Android APK
 
 # Builds sideloadable APKs:
-# - demo: database-free demo mode (always built)
-# - live: talks to the real Supabase project; built only when the repository
-#   variables DUOSYNC_SUPABASE_URL and DUOSYNC_SUPABASE_PUBLISHABLE_KEY are set
+# - live: talks to the real Supabase project; needs the repository variables
+#   DUOSYNC_SUPABASE_URL and DUOSYNC_SUPABASE_PUBLISHABLE_KEY
 #   (Settings → Secrets and variables → Actions → Variables). Both values are
 #   public by design (bundled into the app, protected by RLS) but are kept out
 #   of the repository like every other key. Optional: DUOSYNC_EAS_PROJECT_ID
 #   enables push registration once EAS + FCM are set up.
-# Triggers:
-# - Manual: Actions → "Android APK" → Run workflow
-# - Push to the `apk-build` branch: `git push origin main:apk-build`
-# - Tag push (v*): also attaches the demo APK to a GitHub Release (the live
-#   APK stays an artifact). The repository is public, so any signed-in GitHub
+# - demo: database-free demo mode. Same package name as live, so a phone holds
+#   one or the other; built only on request (user, 2026-11-09).
+# Which variants (the `plan` job):
+# - Push to the `apk-build` branch (`git push origin main:apk-build`): live.
+# - Manual: Actions → "Android APK" → Run workflow → live / demo / both.
+# - Tag push (v*): both; the demo APK is also attached to a GitHub Release.
+# - Variables missing: demo instead of live, with a warning.
+# The live APK stays an artifact. The repository is public, so any signed-in GitHub
 #   user can download artifacts, and the job log shows the URL + key. Neither
 #   is a secret (any APK can be unpacked); what keeps strangers out of the live
 #   project is Supabase Auth → "Allow new users to sign up" = off once both
@@ -24,6 +26,12 @@ name: Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      variants:
+        description: Which APK(s) to build
+        type: choice
+        options: [live, demo, both]
+        default: live
   push:
     branches: [apk-build]
     tags: ['v*']
@@ -36,15 +44,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: Choose APK variants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      variants: ${{ steps.plan.outputs.variants }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WANTED: ${{ inputs.variants }}
+          HAS_LIVE: ${{ vars.DUOSYNC_SUPABASE_URL != '' && vars.DUOSYNC_SUPABASE_PUBLISHABLE_KEY != '' }}
+        run: |
+          case "$EVENT:$REF" in
+            workflow_dispatch:*) want="${WANTED:-live}" ;;
+            push:refs/tags/*) want=both ;;
+            *) want=live ;; # push to apk-build
+          esac
+          if [[ "$HAS_LIVE" != true && "$want" != demo ]]; then
+            echo "::warning::DUOSYNC_SUPABASE_URL / DUOSYNC_SUPABASE_PUBLISHABLE_KEY not set: building the demo APK only"
+            want=demo
+          fi
+          case "$want" in
+            demo) variants='["demo"]' ;;
+            live) variants='["live"]' ;;
+            *) variants='["demo","live"]' ;;
+          esac
+          echo "variants=$variants" >> "$GITHUB_OUTPUT"
+          echo "Building: $variants" | tee -a "$GITHUB_STEP_SUMMARY"
+
   apk:
     name: Build ${{ matrix.variant }} APK
+    needs: plan
     # Pinned: the ubuntu-latest label moves to a new image on 2026-10-19.
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON((vars.DUOSYNC_SUPABASE_URL != '' && vars.DUOSYNC_SUPABASE_PUBLISHABLE_KEY != '') && '["demo","live"]' || '["demo"]') }}
+        variant: ${{ fromJSON(needs.plan.outputs.variants) }}
     env:
       EXPO_PUBLIC_DEMO_MODE: ${{ matrix.variant == 'demo' && '1' || '0' }}
       EXPO_PUBLIC_SUPABASE_URL: ${{ matrix.variant == 'live' && vars.DUOSYNC_SUPABASE_URL || '' }}

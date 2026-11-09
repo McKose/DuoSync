@@ -46,7 +46,7 @@ pg_net, Vault) · Gemini via `GEMINI_MODEL` env (default `gemini-3.5-flash-lite`
 | `tests/unit/encryptedStorage.test.ts` | 18 tests: real AES-GCM via Node WebCrypto, tamper / lost key / AAD / single-flight / legacy migration / UTF-8; decrypt once per process (memory cache), transient error retried, unreadable value kept (never deleted on read), per-entry write order |
 | `tests/unit/aesGcmCipher.test.ts` | 7 tests: the expo-crypto binding against a fake as strict as the Android module (bytes-only `fromCombined`, over-allocated output), base64 decoder. Mock native modules with their Kotlin/Swift signatures, not their `.d.ts` |
 | `tests/e2e/demo.e2e.mjs` | Puppeteer E2E on web demo export (14 steps) |
-| `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e) · demo APK build (push to `apk-build` branch) |
+| `.github/workflows/ci.yml` · `android-apk.yml` | CI (lint/type/db/demo/deno/e2e, unit) · APK build: push to `apk-build` → **live** only; manual run → live/demo/both; `v*` tag → both (needs repo vars `DUOSYNC_SUPABASE_URL` / `_PUBLISHABLE_KEY`, else demo) |
 
 ### Schema objects
 Tables: `profiles, couples, pairing_attempts, push_tokens, court_cases, plans,
