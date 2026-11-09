@@ -67,6 +67,8 @@ npm install
 cp .env.example .env      # SUPABASE_URL, ANON/PUBLISHABLE KEY, EAS project id
 ```
 
+**APK (GitHub Actions, ücretsiz):** `apk-build` dalına push → "Android APK" workflow'u demo APK'yı her zaman üretir. Canlı APK için repoda (Settings → Secrets and variables → Actions → **Variables**) `DUOSYNC_SUPABASE_URL` ve `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` tanımlı olmalı; ikisi de herkese açık değerlerdir (uygulamaya gömülür, koruma RLS'tedir) ama depoya yazılmaz. Opsiyonel `DUOSYNC_EAS_PROJECT_ID` push kaydını açar (EAS + FCM kurulumu gerekir). Workflow eksik/yanlış değerle "canlı" adı altında demo APK üretmez, hata verir.
+
 ### 2. Supabase
 ```bash
 npx supabase link --project-ref <ref>

@@ -138,6 +138,15 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   `eas init`, `eas build --profile development -p android`. Walk every screen.
   If NativeWind 4.2 + Reanimated 4 + RN 0.86 breaks, record it here and decide: NativeWind 5 RC vs StyleSheet.
   *Accept:* all screens render; no red box; push token registered for both users.
+  *Zero-cost path (2026-11-09, user asked for a live APK):* instead of EAS Build, `android-apk.yml` now builds a
+  **live** variant next to the demo one when repo variables `DUOSYNC_SUPABASE_URL` / `DUOSYNC_SUPABASE_PUBLISHABLE_KEY`
+  exist (GitHub Actions free minutes; same debug-signed release APK). A guard step fails the live job on a missing or
+  malformed value, because `IS_DEMO` would otherwise silently fall back to demo; after the build the Hermes bundle is
+  grepped for the project host (verified locally on an `expo export`: present). Push stays off until
+  `DUOSYNC_EAS_PROJECT_ID` + FCM exist, so the "push token registered" criterion is still open.
+  Before two people sign up: Supabase's built-in mailer only reaches the organisation's own team addresses, so
+  turn **Confirm email off** for this personal project; after both accounts exist, turn **Allow new users to sign up
+  off** so a leaked APK cannot open accounts (and spend the D2 Gemini budget).
 - [ ] **A5. Live verification matrix** (1 d)
   | Scenario | Expected |
   |---|---|
