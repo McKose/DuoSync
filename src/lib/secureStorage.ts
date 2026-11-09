@@ -9,7 +9,8 @@ import { AESEncryptionKey, AESKeySize, AESSealedData, aesDecryptAsync, aesEncryp
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-import { createEncryptedStorage, type Cipher, type KeyValueStorage } from './encryptedStorage';
+import { createAesGcmCipher } from './aesGcmCipher';
+import { createEncryptedStorage, type KeyValueStorage } from './encryptedStorage';
 
 /** Keystore entry; bump the suffix only together with a migration. */
 const KEY_NAME = 'duosync.storage-key.v1';
@@ -20,15 +21,15 @@ const KEYSTORE_OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
 };
 
-const aesGcm: Cipher<AESEncryptionKey> = {
+// Narrowed to what the native module accepts (see aesGcmCipher.ts): in
+// particular fromCombined gets bytes, never a base64 string.
+const aesGcm = createAesGcmCipher({
   generateKey: () => AESEncryptionKey.generate(AESKeySize.AES256),
-  exportKey: (key) => key.encoded('base64'),
-  importKey: (encoded) => AESEncryptionKey.import(encoded, 'base64'),
-  encrypt: async (plaintext, key, aad) =>
-    (await aesEncryptAsync(plaintext, key, { additionalData: aad })).combined('base64'),
-  decrypt: (sealed, key, aad) =>
-    aesDecryptAsync(AESSealedData.fromCombined(sealed), key, { output: 'bytes', additionalData: aad }),
-};
+  importKey: (base64) => AESEncryptionKey.import(base64, 'base64'),
+  encryptAsync: (plaintext, key, options) => aesEncryptAsync(plaintext, key, options),
+  fromCombined: (combined) => AESSealedData.fromCombined(combined),
+  decryptAsync: (sealed, key, options) => aesDecryptAsync(sealed, key, options),
+});
 
 export const secureStorage: KeyValueStorage =
   Platform.OS === 'web'

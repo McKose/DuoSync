@@ -25,6 +25,7 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | 2026-11-08 | **D2** Gemini cost/quota monitoring at zero cost (user): per-call usage log without any identifier or text, daily call/token cap checked before claiming (deferred work uses no attempt), 80 % / 100 % alerts (log + optional free Expo push), SQL report. Only Supabase free tier + Expo push; no new service | test:db 71/71, test:functions 16/16 (2 mutations caught) |
 | 2026-11-09 | **Demo APK rebuilt** from `16136ae` (first build since 2026-10-13; includes C1, B2, C3, B4's new `expo-secure-store` native module, D2) by pushing to `apk-build` (user). Two CI network failures fixed on the way, neither in our code: run 2 = Gradle wrapper's 10 s timeout on `services.gradle.org` → 120 s + separate retried download step; run 3 = 504 from the Kotlin compiler jar's GitHub release redirect → Gradle HTTP retries/timeouts, one retry of `assembleRelease`, Gradle cache saved from `apk-build` too | run 4 green in 11 min; artifact `duosync-demo-apk` 24.4 MB, kept until 2026-12-09; not yet installed on a phone |
 | 2026-11-09 | **Live APK** (A4 zero-cost path): `android-apk.yml` builds a demo + live matrix; user set repo variables `DUOSYNC_SUPABASE_URL` / `DUOSYNC_SUPABASE_PUBLISHABLE_KEY` and reported Confirm email off (not readable from the cloud session: `*.supabase.co` blocked by the proxy → verify via `auth.users.email_confirmed_at` after the first sign-up). Pushed `da51b27` to `apk-build`. Found in the log: the `apksigner` glob matched several build-tools versions ("Unsupported command"; diagnostic only) → newest version picked | run 5 green in ≈ 13 min, both jobs; live job: `EXPO_PUBLIC_DEMO_MODE=0`, "Bundle points at ndxpbbvfgupxlgoqoesh.supabase.co"; artifacts `duosync-live-apk` / `duosync-demo-apk` 24.4 MB, kept until 2026-12-09; push off (no EAS project id) |
+| 2026-11-09 | **First phone run (A4) found a B4 bug.** Sign-up worked (2 users, `email_confirmed_at` set → Confirm email off confirmed; 2 profiles via trigger), then "Bağlanamadık — Bu işlem için yetkin yok". Edge logs: every `GET /rest/v1/couples` after `signup` 200 carried the publishable key as `Authorization`, not the user JWT → 401. Root cause: expo-crypto 57's `AESSealedData.fromCombined` is typed `BinaryInput`, its JS wrapper forwards a base64 string unchanged, but Android's Kotlin signature is `fromCombined(combined: ByteArray)` → throws; the storage treated that as an unreadable value, deleted the session, and supabase-js (which re-reads storage on every request) sent requests as anon. The Node tests never ran the RN binding. Fix: `src/lib/aesGcmCipher.ts` (interface narrowed to the native types, own base64 decoder, plaintext trimmed to combined − 28 bytes because the Android module returns its whole provider-sized buffer); new `tests/unit/aesGcmCipher.test.ts` with an Android-strict fake. Values already stored by run 5 use the same layout, so an in-place APK update reads them | test:unit 20/20 (mutations: string to `fromCombined` → 3 fail; no trim → 1 fails), lint 0, typecheck 0, test:demo 31/31; server unchanged |
 
 ## 2. Current state
 
@@ -40,10 +41,10 @@ Keep this file current: tick tasks, add findings, never delete history rows.
 | İstinaf (C3) | ✅ code + tests (server, function, demo, E2E), ❌ never hit live Gemini |
 | Eşleşme bozma (B2) | ✅ code + tests; ✅ `leave_couple()` ran live once (A3 cleanup, 2026-11-08); ❌ not yet on phones (A5); rule #3 caveat accepted (option a, see B2) |
 | Hesap silme (B1) | ⏸ deferred (personal use) |
-| Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore), ❌ not yet on a phone (A4/A5) |
+| Şifreli oturum + önbellek (B4) | ✅ code + tests (AES-256-GCM, key in Keystore); first phone run 2026-11-09 found an Android-only bug (session discarded on read) → fixed, ❌ fix not yet on a phone |
 | Gemini maliyet/kota izleme (D2) | ✅ code + tests (per-call log, daily cap, 80/100 % alert, report); ✅ live (2026-11-08: 1 verdict = 1117 tokens logged) |
 | Live Supabase project | ✅ `ndxpbbvfgupxlgoqoesh` live: 6 migrations (D2 added 2026-11-08), 3 cron jobs, both functions ACTIVE, Vault + function secrets set; `live_check` 14/14 (2026-11-04); advisors audited (A2) |
-| Physical device run | ❌ never; live APK ready (2026-11-09, run 5), installation pending |
+| Physical device run | 🟡 first run 2026-11-09 (live APK, run 5): sign-up OK, then B4 session bug → fixed, rebuilding |
 
 ## 3. Product decisions
 
@@ -151,6 +152,8 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   *Progress 2026-11-09:* live APK built (run 5, `da51b27`, bundle verified to point at `ndxpbbvfgupxlgoqoesh`);
   handed to the user for installation on both phones. Next: both sign up → check `email_confirmed_at` set and
   profiles created, pair, walk every screen; then sign-ups off. Push (EAS project id + FCM) is the remaining gap.
+  First phone run (same day): both sign-ups worked (2 users confirmed, 2 profiles), then the B4 session bug (history
+  row, B4) blocked everything after sign-up; rendering itself was fine (no red box on the screens reached).
   **Exposure found 2026-11-09:** the repository is public, so the live artifact is downloadable by any signed-in
   GitHub user and run logs show URL + publishable key (public by design; any APK can be unpacked anyway). While
   sign-ups are open, a stranger could create two accounts, pair them and file cases: no data of ours is reachable
@@ -213,6 +216,10 @@ Effort in developer-days. Each task: do it, satisfy acceptance, run Definition o
   with real AES-GCM (Node WebCrypto); mutation-checked (drop the AAD → 2 fail; drop single-flight → 1 fails).
   E2E 14/14 on the web export. Not yet verified on a phone (needs A4): add to A5 → after login, force-stop and
   reopen → still signed in; AsyncStorage holds only `enc1:` values.
+  **Bug found on the first phone run (2026-11-09, history row):** the RN binding passed a base64 string to
+  `AESSealedData.fromCombined`, which is bytes-only on Android → every read discarded the session. Fixed in
+  `src/lib/aesGcmCipher.ts` + `tests/unit/aesGcmCipher.test.ts`; lesson: fakes for native modules follow the
+  Kotlin/Swift signatures, not the `.d.ts`.
 
 ### Phase C — Missing modules
 
