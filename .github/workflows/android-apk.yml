@@ -46,6 +46,10 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Also save the cache from apk-build (default: main only), so later
+          # builds download less and depend less on remote repositories.
+          cache-read-only: false
 
       - run: npm ci
 
@@ -72,10 +76,23 @@ jobs:
         working-directory: android
         # Two ABIs cover practically every Android phone in use and roughly
         # halve build time and APK size versus all four.
-        run: >
-          ./gradlew assembleRelease --no-daemon
-          -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
-          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g"
+        # Run 3 failed resolving kotlin-compiler-embeddable (Maven Central →
+        # GitHub release redirect answered 504): more HTTP retries with longer
+        # timeouts inside Gradle, and one more attempt of the whole step, which
+        # reuses everything the first attempt already downloaded.
+        run: |
+          for i in 1 2; do
+            ./gradlew assembleRelease --no-daemon \
+              -PreactNativeArchitectures=arm64-v8a,armeabi-v7a \
+              -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
+              -Dorg.gradle.internal.repository.max.retries=6 \
+              -Dorg.gradle.internal.repository.initial.backoff=2000 \
+              -Dorg.gradle.internal.http.connectionTimeout=120000 \
+              -Dorg.gradle.internal.http.socketTimeout=120000 && exit 0
+            echo "assembleRelease attempt $i failed; retrying in 60 s"
+            sleep 60
+          done
+          exit 1
 
       - name: Collect APK
         id: apk
